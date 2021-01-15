@@ -116,6 +116,9 @@ namespace osu.Framework.Graphics.Video
 
         private readonly FFmpegFuncs ffmpeg;
 
+        private AVCodecContext* _pCodecContext;
+        private int _streamIndex;
+
         internal bool Looping;
 
         /// <summary>
@@ -188,7 +191,7 @@ namespace osu.Framework.Graphics.Video
             {
                 try
                 {
-                    prepareDecoding();
+                    prepareDecoding(AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2);
                 }
                 catch (Exception e)
                 {
@@ -324,7 +327,7 @@ namespace osu.Framework.Graphics.Video
         }
 
         // sets up libavformat state: creates the AVFormatContext, the frames, etc. to start decoding, but does not actually start the decodingLoop
-        private void prepareDecoding()
+        private void prepareDecoding(AVHWDeviceType HWDeviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
         {
             const int context_buffer_size = 4096;
 
@@ -332,16 +335,32 @@ namespace osu.Framework.Graphics.Video
             // this will be safely handled in StartDecoding()
             var fcPtr = ffmpeg.avformat_alloc_context();
             formatContext = fcPtr;
+
             contextBuffer = (byte*)ffmpeg.av_malloc(context_buffer_size);
             managedContextBuffer = new byte[context_buffer_size];
             readPacketCallback = readPacket;
             seekCallback = seek;
             formatContext->pb = ffmpeg.avio_alloc_context(contextBuffer, context_buffer_size, 0, (void*)handle.Handle, readPacketCallback, null, seekCallback);
 
+            AVCodec* codec = null;
+            
             int openInputResult = ffmpeg.avformat_open_input(&fcPtr, "dummy", null, null);
             inputOpened = openInputResult >= 0;
             if (!inputOpened)
                 throw new InvalidOperationException($"Error opening file or stream: {getErrorMessage(openInputResult)}");
+
+            _streamIndex = ffmpeg.av_find_best_stream(formatContext, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+
+            bool streamFound = _streamIndex >= 0;
+            if (!streamFound)
+                throw new InvalidOperationException($"Could not find valid stream: {getErrorMessage(_streamIndex)}");
+
+            _pCodecContext = ffmpeg.avcodec_alloc_context3(codec);
+
+            stream = formatContext->streams[_streamIndex];
+            codecParams = *stream->codecpar;
+            duration = stream->duration <= 0 ? formatContext->duration : stream->duration;
+            timeBaseInSeconds = stream->time_base.GetValue();
 
             int findStreamInfoResult = ffmpeg.avformat_find_stream_info(formatContext, null);
             if (findStreamInfoResult < 0)
@@ -349,28 +368,16 @@ namespace osu.Framework.Graphics.Video
 
             var nStreams = formatContext->nb_streams;
 
-            for (var i = 0; i < nStreams; ++i)
+            if (HWDeviceType != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
             {
-                stream = formatContext->streams[i];
-
-                codecParams = *stream->codecpar;
-
-                if (codecParams.codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
-                {
-                    duration = stream->duration <= 0 ? formatContext->duration : stream->duration;
-
-                    timeBaseInSeconds = stream->time_base.GetValue();
-                    var codecPtr = ffmpeg.avcodec_find_decoder(codecParams.codec_id);
-                    if (codecPtr == null)
-                        throw new InvalidOperationException($"Couldn't find codec with id: {codecParams.codec_id}");
-
-                    int openCodecResult = ffmpeg.avcodec_open2(stream->codec, codecPtr, null);
-                    if (openCodecResult < 0)
-                        throw new InvalidOperationException($"Error trying to open codec with id {codecParams.codec_id}: {getErrorMessage(openCodecResult)}");
-
-                    break;
-                }
+                int hwDecCtxCreate = ffmpeg.av_hwdevice_ctx_create(&_pCodecContext->hw_device_ctx, HWDeviceType, null, null, 0);
+                if (hwDecCtxCreate != 0)
+                    throw new InvalidOperationException($"Error creating hardware device context: {getErrorMessage(hwDecCtxCreate)}");
             }
+
+            int openCodecResult = ffmpeg.avcodec_open2(stream->codec, codec, null);
+            if (openCodecResult < 0)
+                throw new InvalidOperationException($"Error trying to open codec with id {codecParams.codec_id}: {getErrorMessage(openCodecResult)}");
 
             prepareFilters();
         }
@@ -573,7 +580,12 @@ namespace osu.Framework.Graphics.Video
                 avio_alloc_context = AGffmpeg.avio_alloc_context,
                 sws_freeContext = AGffmpeg.sws_freeContext,
                 sws_getContext = AGffmpeg.sws_getContext,
-                sws_scale = AGffmpeg.sws_scale
+                sws_scale = AGffmpeg.sws_scale,
+                av_hwdevice_iterate_types = AGffmpeg.av_hwdevice_iterate_types,
+                av_hwdevice_ctx_create = AGffmpeg.av_hwdevice_ctx_create,
+                av_find_best_stream = AGffmpeg.av_find_best_stream,
+                avcodec_alloc_context3 = AGffmpeg.avcodec_alloc_context3
+
             };
         }
 

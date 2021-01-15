@@ -59,6 +59,14 @@ namespace osu.Framework.Graphics.Video
 
         public delegate int SwsScaleDelegate(SwsContext* c, byte*[] srcSlice, int[] srcStride, int srcSliceY, int srcSliceH, byte*[] dst, int[] dstStride);
 
+        public delegate AVHWDeviceType AvHwDeviceIterateTypesDelegate(AVHWDeviceType prev);
+
+        public delegate int AvHwDeviceCtxCreateDelegate(AVBufferRef** @device_ctx, AVHWDeviceType @type, string @device, AVDictionary* @opts, int @flags);
+
+        public delegate int AvFindBestStream(AVFormatContext* @ic, AVMediaType @type, int @wanted_stream_nb, int @related_stream, AVCodec** @decoder_ret, int @flags);
+
+        public delegate AVCodecContext* AvCodecAllocContext3(AVCodec* @codec);
+
         #endregion
 
         public AvFrameAllocDelegate av_frame_alloc;
@@ -85,5 +93,9 @@ namespace osu.Framework.Graphics.Video
         public SwsFreeContextDelegate sws_freeContext;
         public SwsGetContextDelegate sws_getContext;
         public SwsScaleDelegate sws_scale;
+        public AvHwDeviceIterateTypesDelegate av_hwdevice_iterate_types;
+        public AvHwDeviceCtxCreateDelegate av_hwdevice_ctx_create;
+        public AvFindBestStream av_find_best_stream;
+        public AvCodecAllocContext3 avcodec_alloc_context3;
     }
 }
