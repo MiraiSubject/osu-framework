@@ -573,7 +573,13 @@ namespace osu.Framework.Graphics.Video
                 avio_alloc_context = AGffmpeg.avio_alloc_context,
                 sws_freeContext = AGffmpeg.sws_freeContext,
                 sws_getContext = AGffmpeg.sws_getContext,
-                sws_scale = AGffmpeg.sws_scale
+                sws_scale = AGffmpeg.sws_scale,
+                av_hwdevice_iterate_types = AGffmpeg.av_hwdevice_iterate_types,
+                av_hwdevice_ctx_create = AGffmpeg.av_hwdevice_ctx_create,
+                av_find_best_stream = AGffmpeg.av_find_best_stream,
+                avcodec_alloc_context3 = AGffmpeg.avcodec_alloc_context3,
+                av_hwframe_transfer_data = AGffmpeg.av_hwframe_transfer_data,
+                avcodec_parameters_to_context = AGffmpeg.avcodec_parameters_to_context
             };
         }
 
