@@ -83,6 +83,8 @@ namespace osu.Framework.Graphics.Video
         private AVFormatContext* formatContext;
         private AVStream* stream;
         private AVCodecParameters codecParams;
+        private AVCodecContext* codecContext;
+        private int _streamIndex;
         private byte* contextBuffer;
         private byte[] managedContextBuffer;
 
@@ -311,7 +313,7 @@ namespace osu.Framework.Graphics.Video
         private void prepareFilters()
         {
             // only convert if needed
-            if (stream->codec->pix_fmt == AVPixelFormat.AV_PIX_FMT_YUV420P)
+            if (codecContext->pix_fmt == AVPixelFormat.AV_PIX_FMT_YUV420P)
             {
                 convert = false;
                 return;
@@ -319,12 +321,12 @@ namespace osu.Framework.Graphics.Video
 
             // 1 =  SWS_FAST_BILINEAR
             // https://www.ffmpeg.org/doxygen/3.1/swscale_8h_source.html#l00056
-            convCtx = ffmpeg.sws_getContext(stream->codec->width, stream->codec->height, stream->codec->pix_fmt, stream->codec->width, stream->codec->height,
+            convCtx = ffmpeg.sws_getContext(codecContext->width, codecContext->height, codecContext->pix_fmt, codecContext->width, codecContext->height,
                 AVPixelFormat.AV_PIX_FMT_YUV420P, 1, null, null, null);
         }
 
         // sets up libavformat state: creates the AVFormatContext, the frames, etc. to start decoding, but does not actually start the decodingLoop
-        private void prepareDecoding()
+        private void prepareDecoding(AVHWDeviceType HWDeviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2)
         {
             const int context_buffer_size = 4096;
 
@@ -332,6 +334,7 @@ namespace osu.Framework.Graphics.Video
             // this will be safely handled in StartDecoding()
             var fcPtr = ffmpeg.avformat_alloc_context();
             formatContext = fcPtr;
+
             contextBuffer = (byte*)ffmpeg.av_malloc(context_buffer_size);
             managedContextBuffer = new byte[context_buffer_size];
             readPacketCallback = readPacket;
@@ -347,32 +350,31 @@ namespace osu.Framework.Graphics.Video
             if (findStreamInfoResult < 0)
                 throw new InvalidOperationException($"Error finding stream info: {getErrorMessage(findStreamInfoResult)}");
 
-            var nStreams = formatContext->nb_streams;
+            AVCodec* codec = null;
 
-            for (var i = 0; i < nStreams; ++i)
-            {
-                stream = formatContext->streams[i];
+            _streamIndex = ffmpeg.av_find_best_stream(formatContext, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+            bool streamFound = _streamIndex >= 0;
+            if (!streamFound)
+                throw new InvalidOperationException($"Could not find valid stream: {getErrorMessage(_streamIndex)}");
 
-                codecParams = *stream->codecpar;
+            codecContext = ffmpeg.avcodec_alloc_context3(codec);
 
-                if (codecParams.codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
-                {
-                    duration = stream->duration <= 0 ? formatContext->duration : stream->duration;
+            stream = formatContext->streams[_streamIndex];
+            duration = stream->duration <= 0 ? formatContext->duration : stream->duration;
+            timeBaseInSeconds = stream->time_base.GetValue();
 
-                    timeBaseInSeconds = stream->time_base.GetValue();
-                    var codecPtr = ffmpeg.avcodec_find_decoder(codecParams.codec_id);
-                    if (codecPtr == null)
-                        throw new InvalidOperationException($"Couldn't find codec with id: {codecParams.codec_id}");
+            int copyParams = ffmpeg.avcodec_parameters_to_context(codecContext, stream->codecpar);
+            if (copyParams < 0)
+                throw new InvalidOperationException($"Error filling codec context with parameters: {getErrorMessage(copyParams)}");
 
-                    int openCodecResult = ffmpeg.avcodec_open2(stream->codec, codecPtr, null);
-                    if (openCodecResult < 0)
-                        throw new InvalidOperationException($"Error trying to open codec with id {codecParams.codec_id}: {getErrorMessage(openCodecResult)}");
+            codecParams = *stream->codecpar;
 
-                    break;
-                }
-            }
+            int openCodecResult = ffmpeg.avcodec_open2(codecContext, codec, null);
+            if (openCodecResult < 0)
+                throw new InvalidOperationException($"Error trying to open codec with id {codecParams.codec_id}: {getErrorMessage(openCodecResult)}");
 
             prepareFilters();
+
         }
 
         private void decodingLoop(CancellationToken cancellationToken)
@@ -398,14 +400,14 @@ namespace osu.Framework.Graphics.Video
 
                             if (packet->stream_index == stream->index)
                             {
-                                int sendPacketResult = ffmpeg.avcodec_send_packet(stream->codec, packet);
+                                int sendPacketResult = ffmpeg.avcodec_send_packet(codecContext, packet);
 
                                 if (sendPacketResult == 0)
                                 {
                                     AVFrame* frame = ffmpeg.av_frame_alloc();
                                     AVFrame* outFrame = null;
 
-                                    var result = ffmpeg.avcodec_receive_frame(stream->codec, frame);
+                                    var result = ffmpeg.avcodec_receive_frame(codecContext, frame);
 
                                     if (result == 0)
                                     {
