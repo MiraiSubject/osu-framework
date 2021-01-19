@@ -359,6 +359,15 @@ namespace osu.Framework.Graphics.Video
 
             codecContext = ffmpeg.avcodec_alloc_context3(codec);
 
+            if (HWDeviceType != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
+            {
+                int hwDecCtxCreate = ffmpeg.av_hwdevice_ctx_create(&codecContext->hw_device_ctx, HWDeviceType, null, null, 0);
+                if (hwDecCtxCreate != 0)
+                    throw new InvalidOperationException($"Error creating hardware device context: {getErrorMessage(hwDecCtxCreate)}");
+
+                Logger.Log("Initialised hardware device context.");
+            }
+
             stream = formatContext->streams[_streamIndex];
             duration = stream->duration <= 0 ? formatContext->duration : stream->duration;
             timeBaseInSeconds = stream->time_base.GetValue();
