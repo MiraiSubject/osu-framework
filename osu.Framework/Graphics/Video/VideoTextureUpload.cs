@@ -31,9 +31,6 @@ namespace osu.Framework.Graphics.Video
 
         protected override void Dispose(bool disposing)
         {
-            fixed (AVFrame** ptr = &Frame)
-                freeFrame(ptr);
-
             base.Dispose(disposing);
         }
 
