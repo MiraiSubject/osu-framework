@@ -10,9 +10,6 @@ namespace osu.Framework.Graphics.Video
     public unsafe class VideoTextureUpload : ArrayPoolTextureUpload
     {
         public AVFrame* Frame;
-
-        private readonly FFmpegFuncs.AvFrameFreeDelegate freeFrame;
-
         public override PixelFormat Format => PixelFormat.Red;
 
         /// <summary>
@@ -24,16 +21,6 @@ namespace osu.Framework.Graphics.Video
             : base(0, 0)
         {
             Frame = frame;
-            freeFrame = free;
         }
-
-        #region IDisposable Support
-
-        protected override void Dispose(bool disposing)
-        {
-            base.Dispose(disposing);
-        }
-
-        #endregion
     }
 }
