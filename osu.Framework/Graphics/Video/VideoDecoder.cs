@@ -344,7 +344,6 @@ namespace osu.Framework.Graphics.Video
             convertContext = ffmpeg.sws_getContext(codecContext->width, codecContext->height, sourcePixelFormat, codecContext->width, codecContext->height,
                 AVPixelFormat.AV_PIX_FMT_YUV420P, 1, null, null, null);
 
-
             var convertedFrameBufferSize = AGffmpeg.av_image_get_buffer_size(destinationPixelFormat, sdWidth, sdHeight, 1);
 
             convertedFrameBufferPtr = Marshal.AllocHGlobal(convertedFrameBufferSize);
@@ -440,7 +439,7 @@ namespace osu.Framework.Graphics.Video
                             else
                                 state = DecoderState.EndOfStream;
 
-                            return frame;
+                            return null;
                         }
                         else if (avReadFrameError >= 0)
                         {
@@ -495,6 +494,12 @@ namespace osu.Framework.Graphics.Video
                     {
                         var newFrame = TryDecodeNextFrame();
 
+                        // end of file or other error
+                        if (newFrame == null)
+                        {
+                            break;
+                        }
+
                         var frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timeBaseInSeconds * 1000;
 
                         if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
@@ -506,7 +511,6 @@ namespace osu.Framework.Graphics.Video
                                 // var ret = ffmpeg.av_frame_get_buffer(outFrame, 32);
                                 // if (ret < 0)
                                 //     throw new InvalidOperationException($"Error allocating video frame: {getErrorMessage(ret)}");
-
                                 ffmpeg.sws_scale(convertContext, newFrame->data, newFrame->linesize, 0, codecContext->height,
                                     convDstData, convDstLineSize);
 
