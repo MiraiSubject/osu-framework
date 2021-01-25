@@ -495,49 +495,47 @@ namespace osu.Framework.Graphics.Video
                         var newFrame = TryDecodeNextFrame();
 
                         // end of file or other error
-                        if (newFrame == null)
+                        if (newFrame != null)
                         {
-                            break;
-                        }
+                            var frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timeBaseInSeconds * 1000;
 
-                        var frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timeBaseInSeconds * 1000;
-
-                        if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
-                        {
-                            skipOutputUntilTime = null;
-
-                            if (convert)
+                            if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
                             {
-                                // var ret = ffmpeg.av_frame_get_buffer(outFrame, 32);
-                                // if (ret < 0)
-                                //     throw new InvalidOperationException($"Error allocating video frame: {getErrorMessage(ret)}");
-                                ffmpeg.sws_scale(convertContext, newFrame->data, newFrame->linesize, 0, codecContext->height,
-                                    convDstData, convDstLineSize);
+                                skipOutputUntilTime = null;
 
-                                var outFrameData = new byte_ptrArray8();
-                                outFrameData.UpdateFrom(convDstData);
-                                var linesize = new int_array8();
-                                linesize.UpdateFrom(convDstLineSize);
+                                if (convert)
+                                {
+                                    // var ret = ffmpeg.av_frame_get_buffer(outFrame, 32);
+                                    // if (ret < 0)
+                                    //     throw new InvalidOperationException($"Error allocating video frame: {getErrorMessage(ret)}");
+                                    ffmpeg.sws_scale(convertContext, newFrame->data, newFrame->linesize, 0, codecContext->height,
+                                        convDstData, convDstLineSize);
 
-                                outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
-                                outFrame->width = codecContext->width;
-                                outFrame->height = codecContext->height;
-                                outFrame->data = outFrameData;
-                                outFrame->linesize = linesize;
+                                    var outFrameData = new byte_ptrArray8();
+                                    outFrameData.UpdateFrom(convDstData);
+                                    var linesize = new int_array8();
+                                    linesize.UpdateFrom(convDstLineSize);
+
+                                    outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
+                                    outFrame->width = codecContext->width;
+                                    outFrame->height = codecContext->height;
+                                    outFrame->data = outFrameData;
+                                    outFrame->linesize = linesize;
+                                }
+                                else
+                                    outFrame = newFrame;
+
+                                if (!availableTextures.TryDequeue(out var tex))
+                                    tex = new Texture(new VideoTexture(codecParams.width, codecParams.height));
+
+                                var upload = new VideoTextureUpload(outFrame, ffmpeg.av_frame_free);
+
+                                tex.SetData(upload);
+                                decodedFrames.Enqueue(new DecodedFrame { Time = frameTime, Texture = tex });
                             }
-                            else
-                                outFrame = newFrame;
 
-                            if (!availableTextures.TryDequeue(out var tex))
-                                tex = new Texture(new VideoTexture(codecParams.width, codecParams.height));
-
-                            var upload = new VideoTextureUpload(outFrame, ffmpeg.av_frame_free);
-
-                            tex.SetData(upload);
-                            decodedFrames.Enqueue(new DecodedFrame { Time = frameTime, Texture = tex });
+                            lastDecodedFrameTime = (float)frameTime;
                         }
-
-                        lastDecodedFrameTime = (float)frameTime;
                     }
                     else
                     {
