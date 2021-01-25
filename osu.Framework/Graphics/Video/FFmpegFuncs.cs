@@ -71,6 +71,8 @@ namespace osu.Framework.Graphics.Video
 
         public delegate int AVCodecParametersToContext(AVCodecContext* @codec, AVCodecParameters* @par);
 
+        public delegate void AVCodecFlushBuffers(AVCodecContext* avctx);
+
         #endregion
 
         public AvFrameAllocDelegate av_frame_alloc;
@@ -103,5 +105,6 @@ namespace osu.Framework.Graphics.Video
         public AvCodecAllocContext3 avcodec_alloc_context3;
         public AvHwFrameTransferData av_hwframe_transfer_data;
         public AVCodecParametersToContext avcodec_parameters_to_context;
+        public AVCodecFlushBuffers avcodec_flush_buffers;
     }
 }

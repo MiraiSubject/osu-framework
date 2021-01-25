@@ -124,6 +124,8 @@ namespace osu.Framework.Graphics.Video
 
         private readonly FFmpegFuncs ffmpeg;
 
+        private readonly ManualResetEventSlim seekEvent = new ManualResetEventSlim(true);
+
         internal bool Looping;
 
         /// <summary>
@@ -166,10 +168,15 @@ namespace osu.Framework.Graphics.Video
             if (!CanSeek)
                 throw new InvalidOperationException("This decoder cannot seek because the underlying stream used to decode the video does not support seeking.");
 
+            seekEvent.Reset();
             decoderCommands.Enqueue(() =>
             {
                 ffmpeg.av_seek_frame(formatContext, stream->index, (long)(targetTimestamp / timeBaseInSeconds / 1000.0), AGffmpeg.AVSEEK_FLAG_BACKWARD);
+                ffmpeg.avcodec_flush_buffers(codecContext);
                 skipOutputUntilTime = targetTimestamp;
+                decodedFrames.Clear();
+ 
+                seekEvent.Set();
             });
         }
 
@@ -237,6 +244,8 @@ namespace osu.Framework.Graphics.Video
         /// <returns>The frames that have been decoded up until the point in time this method was called.</returns>
         public IEnumerable<DecodedFrame> GetDecodedFrames()
         {
+            seekEvent.Wait();
+
             var frames = new List<DecodedFrame>(decodedFrames.Count);
             while (decodedFrames.TryDequeue(out var df))
                 frames.Add(df);
@@ -415,6 +424,7 @@ namespace osu.Framework.Graphics.Video
             ffmpeg.av_frame_unref(receivedFrame);
 
             int receiveFrameError;
+
             do
             {
                 try
@@ -441,13 +451,11 @@ namespace osu.Framework.Graphics.Video
                             state = DecoderState.Ready;
                             Thread.Sleep(1);
                         }
-
                     } while (packet->stream_index != _streamIndex);
 
                     int sendPacket = ffmpeg.avcodec_send_packet(codecContext, packet);
                     if (sendPacket != 0)
                         Logger.Log($"Error {sendPacket} sending packet in VideoDecoder");
-
                 }
                 finally
                 {
@@ -462,7 +470,6 @@ namespace osu.Framework.Graphics.Video
                 int hwFrame = ffmpeg.av_hwframe_transfer_data(receivedFrame, frame, 0);
                 if (hwFrame < 0)
                     throw new InvalidOperationException("Failed to transfer data to hardware device");
-                
                 // hardware frame has negative long as best effort timestamp so copy it from the original frame.
                 receivedFrame->best_effort_timestamp = frame->best_effort_timestamp;
 
@@ -472,11 +479,11 @@ namespace osu.Framework.Graphics.Video
                 return frame;
         }
 
-
         private void decodingLoop(CancellationToken cancellationToken)
         {
             const int max_pending_frames = 3;
             AVFrame* outFrame = ffmpeg.av_frame_alloc();
+
             try
             {
                 while (true)
@@ -486,9 +493,9 @@ namespace osu.Framework.Graphics.Video
 
                     if (decodedFrames.Count < max_pending_frames)
                     {
-                        var frame = TryDecodeNextFrame();
+                        var newFrame = TryDecodeNextFrame();
 
-                        var frameTime = (frame->best_effort_timestamp - stream->start_time) * timeBaseInSeconds * 1000;
+                        var frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timeBaseInSeconds * 1000;
 
                         if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
                         {
@@ -500,7 +507,7 @@ namespace osu.Framework.Graphics.Video
                                 // if (ret < 0)
                                 //     throw new InvalidOperationException($"Error allocating video frame: {getErrorMessage(ret)}");
 
-                                ffmpeg.sws_scale(convertContext, frame->data, frame->linesize, 0, codecContext->height,
+                                ffmpeg.sws_scale(convertContext, newFrame->data, newFrame->linesize, 0, codecContext->height,
                                     convDstData, convDstLineSize);
 
                                 var outFrameData = new byte_ptrArray8();
@@ -513,10 +520,9 @@ namespace osu.Framework.Graphics.Video
                                 outFrame->height = codecContext->height;
                                 outFrame->data = outFrameData;
                                 outFrame->linesize = linesize;
-
                             }
                             else
-                                outFrame = frame;
+                                outFrame = newFrame;
 
                             if (!availableTextures.TryDequeue(out var tex))
                                 tex = new Texture(new VideoTexture(codecParams.width, codecParams.height));
@@ -535,7 +541,6 @@ namespace osu.Framework.Graphics.Video
                         state = DecoderState.Ready;
                         Thread.Sleep(1);
                     }
-
 
                     while (!decoderCommands.IsEmpty)
                     {
@@ -641,7 +646,8 @@ namespace osu.Framework.Graphics.Video
                 av_find_best_stream = AGffmpeg.av_find_best_stream,
                 avcodec_alloc_context3 = AGffmpeg.avcodec_alloc_context3,
                 av_hwframe_transfer_data = AGffmpeg.av_hwframe_transfer_data,
-                avcodec_parameters_to_context = AGffmpeg.avcodec_parameters_to_context
+                avcodec_parameters_to_context = AGffmpeg.avcodec_parameters_to_context,
+                avcodec_flush_buffers = AGffmpeg.avcodec_flush_buffers
             };
         }
 
