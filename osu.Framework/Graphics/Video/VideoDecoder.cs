@@ -701,6 +701,8 @@ namespace osu.Framework.Graphics.Video
                 t.Dispose();
 
             handle.Dispose();
+
+            seekEvent.Dispose();
         }
 
         #endregion
