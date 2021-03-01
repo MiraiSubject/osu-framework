@@ -1,9 +1,6 @@
 // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
-using FFmpeg.AutoGen;
-using osuTK;
-using osu.Framework.Graphics.Textures;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -12,11 +9,14 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using FFmpeg.AutoGen;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
+using osu.Framework.Graphics.Textures;
 using osu.Framework.Logging;
 using osu.Framework.Platform;
 using osu.Framework.Threading;
+using osuTK;
 using AGffmpeg = FFmpeg.AutoGen.ffmpeg;
 
 namespace osu.Framework.Graphics.Video
@@ -88,6 +88,7 @@ namespace osu.Framework.Graphics.Video
         private AVFrame* frame;
         private AVFrame* receivedFrame;
         private int streamIndex;
+        private AVHWDeviceType hWDeviceType;
         private byte* contextBuffer;
         private byte[] managedContextBuffer;
 
@@ -143,10 +144,11 @@ namespace osu.Framework.Graphics.Video
         /// </summary>
         /// <param name="videoStream">The stream that should be decoded.</param>
         /// <param name="scheduler">The <see cref="Scheduler"/> to use when scheduling tasks from the decoder thread.</param>
-        public VideoDecoder(Stream videoStream, Scheduler scheduler)
+        /// <param name="hwDevice">The <see cref="AVHWDeviceType"/> to use when decoding the video.</param>
+        public VideoDecoder(Stream videoStream, Scheduler scheduler, AVHWDeviceType hwDevice = AVHWDeviceType.AV_HWDEVICE_TYPE_CUDA)
         {
             ffmpeg = CreateFuncs();
-
+            hWDeviceType = hwDevice;
             this.scheduler = scheduler;
             this.videoStream = videoStream;
             if (!videoStream.CanRead)
@@ -336,7 +338,7 @@ namespace osu.Framework.Graphics.Video
 
             var sdWidth = codecContext->width;
             var sdHeight = codecContext->height;
-            AVPixelFormat sourcePixelFormat = AVPixelFormat.AV_PIX_FMT_NV12;
+            AVPixelFormat sourcePixelFormat = getHWPixelFormat(hWDeviceType);
             AVPixelFormat destinationPixelFormat = AVPixelFormat.AV_PIX_FMT_YUV420P;
 
             // 1 =  SWS_FAST_BILINEAR
@@ -353,8 +355,31 @@ namespace osu.Framework.Graphics.Video
             AGffmpeg.av_image_fill_arrays(ref convDstData, ref convDstLineSize, (byte*)convertedFrameBufferPtr, destinationPixelFormat, sdWidth, sdHeight, 1);
         }
 
+        private static AVPixelFormat getHWPixelFormat(AVHWDeviceType hWDevice)
+        {
+            switch (hWDevice)
+            {
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_NONE:
+                    return AVPixelFormat.AV_PIX_FMT_YUV420P;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_VDPAU:
+                    return AVPixelFormat.AV_PIX_FMT_VDPAU;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI:
+                    return AVPixelFormat.AV_PIX_FMT_VAAPI;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2:
+                    return AVPixelFormat.AV_PIX_FMT_NV12;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_QSV:
+                    return AVPixelFormat.AV_PIX_FMT_QSV;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
+                    return AVPixelFormat.AV_PIX_FMT_VIDEOTOOLBOX;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA:
+                    return AVPixelFormat.AV_PIX_FMT_NV12;
+                default:
+                    return AVPixelFormat.AV_PIX_FMT_NONE;
+            }
+        }
+
         // sets up libavformat state: creates the AVFormatContext, the frames, etc. to start decoding, but does not actually start the decodingLoop
-        private void prepareDecoding(AVHWDeviceType HWDeviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2)
+        private void prepareDecoding()
         {
             const int context_buffer_size = 4096;
 
@@ -388,9 +413,9 @@ namespace osu.Framework.Graphics.Video
 
             codecContext = ffmpeg.avcodec_alloc_context3(codec);
 
-            if (HWDeviceType != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
+            if (hWDeviceType != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
             {
-                int hwDecCtxCreate = ffmpeg.av_hwdevice_ctx_create(&codecContext->hw_device_ctx, HWDeviceType, null, null, 0);
+                int hwDecCtxCreate = ffmpeg.av_hwdevice_ctx_create(&codecContext->hw_device_ctx, hWDeviceType, null, null, 0);
                 if (hwDecCtxCreate != 0)
                     throw new InvalidOperationException($"Error creating hardware device context: {getErrorMessage(hwDecCtxCreate)}");
 
