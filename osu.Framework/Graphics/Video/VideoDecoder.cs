@@ -359,20 +359,12 @@ namespace osu.Framework.Graphics.Video
         {
             switch (hWDevice)
             {
-                case AVHWDeviceType.AV_HWDEVICE_TYPE_NONE:
-                    return AVPixelFormat.AV_PIX_FMT_YUV420P;
-                case AVHWDeviceType.AV_HWDEVICE_TYPE_VDPAU:
-                    return AVPixelFormat.AV_PIX_FMT_VDPAU;
                 case AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI:
-                    return AVPixelFormat.AV_PIX_FMT_VAAPI;
                 case AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2:
-                    return AVPixelFormat.AV_PIX_FMT_NV12;
-                case AVHWDeviceType.AV_HWDEVICE_TYPE_QSV:
-                    return AVPixelFormat.AV_PIX_FMT_QSV;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_VDPAU:
                 case AVHWDeviceType.AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
                     return AVPixelFormat.AV_PIX_FMT_NV12;
-                case AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA:
-                    return AVPixelFormat.AV_PIX_FMT_NV12;
+                case AVHWDeviceType.AV_HWDEVICE_TYPE_NONE:
                 default:
                     return AVPixelFormat.AV_PIX_FMT_YUV420P;
             }
