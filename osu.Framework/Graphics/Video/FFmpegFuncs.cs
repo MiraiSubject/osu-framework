@@ -61,15 +61,15 @@ namespace osu.Framework.Graphics.Video
 
         public delegate AVHWDeviceType AvHwDeviceIterateTypesDelegate(AVHWDeviceType prev);
 
-        public delegate int AvHwDeviceCtxCreateDelegate(AVBufferRef** @device_ctx, AVHWDeviceType @type, string @device, AVDictionary* @opts, int @flags);
+        public delegate int AvHwDeviceCtxCreateDelegate(AVBufferRef** device_ctx, AVHWDeviceType type, string device, AVDictionary* opts, int flags);
 
-        public delegate int AvFindBestStream(AVFormatContext* @ic, AVMediaType @type, int @wanted_stream_nb, int @related_stream, AVCodec** @decoder_ret, int @flags);
+        public delegate int AvFindBestStream(AVFormatContext* ic, AVMediaType type, int wanted_stream_nb, int related_stream, AVCodec** decoder_ret, int flags);
 
-        public delegate AVCodecContext* AvCodecAllocContext3(AVCodec* @codec);
+        public delegate AVCodecContext* AvCodecAllocContext3(AVCodec* codec);
 
-        public delegate int AvHwFrameTransferData(AVFrame *dst, AVFrame* @src, int @flags);
+        public delegate int AvHwFrameTransferData(AVFrame* dst, AVFrame* src, int flags);
 
-        public delegate int AVCodecParametersToContext(AVCodecContext* @codec, AVCodecParameters* @par);
+        public delegate int AVCodecParametersToContext(AVCodecContext* codec, AVCodecParameters* par);
 
         public delegate void AVCodecFlushBuffers(AVCodecContext* avctx);
 

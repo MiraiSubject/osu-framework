@@ -88,7 +88,7 @@ namespace osu.Framework.Graphics.Video
         private AVFrame* frame;
         private AVFrame* receivedFrame;
         private int streamIndex;
-        private AVHWDeviceType hWDeviceType;
+        private readonly AVHWDeviceType hWDeviceType;
         private byte* contextBuffer;
         private byte[] managedContextBuffer;
 
@@ -329,8 +329,8 @@ namespace osu.Framework.Graphics.Video
 
         private void prepareFilters()
         {
-            AVPixelFormat sourcePixelFormat = getHWPixelFormat(hWDeviceType);
-            AVPixelFormat destinationPixelFormat = AVPixelFormat.AV_PIX_FMT_YUV420P;
+            AVPixelFormat sourcePixelFormat = getHwPixelFormat(hWDeviceType);
+            const AVPixelFormat destination_pixel_format = AVPixelFormat.AV_PIX_FMT_YUV420P;
 
             var sdWidth = codecContext->width;
             var sdHeight = codecContext->height;
@@ -340,16 +340,16 @@ namespace osu.Framework.Graphics.Video
             convertContext = ffmpeg.sws_getContext(codecContext->width, codecContext->height, sourcePixelFormat, codecContext->width, codecContext->height,
                 AVPixelFormat.AV_PIX_FMT_YUV420P, 1, null, null, null);
 
-            var convertedFrameBufferSize = AGffmpeg.av_image_get_buffer_size(destinationPixelFormat, sdWidth, sdHeight, 1);
+            var convertedFrameBufferSize = AGffmpeg.av_image_get_buffer_size(destination_pixel_format, sdWidth, sdHeight, 1);
 
             convertedFrameBufferPtr = Marshal.AllocHGlobal(convertedFrameBufferSize);
             convDstData = new byte_ptrArray4();
             convDstLineSize = new int_array4();
 
-            AGffmpeg.av_image_fill_arrays(ref convDstData, ref convDstLineSize, (byte*)convertedFrameBufferPtr, destinationPixelFormat, sdWidth, sdHeight, 1);
+            AGffmpeg.av_image_fill_arrays(ref convDstData, ref convDstLineSize, (byte*)convertedFrameBufferPtr, destination_pixel_format, sdWidth, sdHeight, 1);
         }
 
-        private static AVPixelFormat getHWPixelFormat(AVHWDeviceType hWDevice)
+        private static AVPixelFormat getHwPixelFormat(AVHWDeviceType hWDevice)
         {
             switch (hWDevice)
             {
@@ -358,6 +358,7 @@ namespace osu.Framework.Graphics.Video
                 case AVHWDeviceType.AV_HWDEVICE_TYPE_VDPAU:
                 case AVHWDeviceType.AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
                     return AVPixelFormat.AV_PIX_FMT_NV12;
+
                 case AVHWDeviceType.AV_HWDEVICE_TYPE_NONE:
                 default:
                     return AVPixelFormat.AV_PIX_FMT_YUV420P;
@@ -443,7 +444,15 @@ namespace osu.Framework.Graphics.Video
                     {
                         int avReadFrameError = ffmpeg.av_read_frame(formatContext, packet);
 
-                        if (avReadFrameError == AGffmpeg.AVERROR_EOF)
+                        if (avReadFrameError != AGffmpeg.AVERROR_EOF)
+                        {
+                            if (avReadFrameError >= 0)
+                                continue;
+
+                            state = DecoderState.Ready;
+                            Thread.Sleep(1);
+                        }
+                        else
                         {
                             if (Looping)
                                 Seek(0);
@@ -451,15 +460,6 @@ namespace osu.Framework.Graphics.Video
                                 state = DecoderState.EndOfStream;
 
                             return null;
-                        }
-                        else if (avReadFrameError >= 0)
-                        {
-                            continue;
-                        }
-                        else
-                        {
-                            state = DecoderState.Ready;
-                            Thread.Sleep(1);
                         }
                     } while (packet->stream_index != streamIndex);
 
