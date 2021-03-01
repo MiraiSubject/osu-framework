@@ -497,6 +497,8 @@ namespace osu.Framework.Graphics.Video
                 // hardware frame has negative long as best effort timestamp so copy it from the original frame.
                 receivedFrame->best_effort_timestamp = frame->best_effort_timestamp;
 
+                Logger.Log($"{receivedFrame->format}");
+
                 return receivedFrame;
             }
             else
