@@ -103,7 +103,6 @@ namespace osu.Framework.Graphics.Video
         private long duration;
 
         private SwsContext* convertContext;
-        private bool convert = true;
         private IntPtr convertedFrameBufferPtr;
         private byte_ptrArray4 convDstData;
         private int_array4 convDstLineSize;
@@ -330,17 +329,11 @@ namespace osu.Framework.Graphics.Video
 
         private void prepareFilters()
         {
-            // only convert if needed
-            // if (codecContext->pix_fmt == AVPixelFormat.AV_PIX_FMT_YUV420P)
-            // {
-            //     convert = false;
-            //     return;
-            // }
+            AVPixelFormat sourcePixelFormat = getHWPixelFormat(hWDeviceType);
+            AVPixelFormat destinationPixelFormat = AVPixelFormat.AV_PIX_FMT_YUV420P;
 
             var sdWidth = codecContext->width;
             var sdHeight = codecContext->height;
-            AVPixelFormat sourcePixelFormat = getHWPixelFormat(hWDeviceType);
-            AVPixelFormat destinationPixelFormat = AVPixelFormat.AV_PIX_FMT_YUV420P;
 
             // 1 =  SWS_FAST_BILINEAR
             // https://www.ffmpeg.org/doxygen/3.1/swscale_8h_source.html#l00056
@@ -521,27 +514,19 @@ namespace osu.Framework.Graphics.Video
                             {
                                 skipOutputUntilTime = null;
 
-                                if (convert)
-                                {
-                                    // var ret = ffmpeg.av_frame_get_buffer(outFrame, 32);
-                                    // if (ret < 0)
-                                    //     throw new InvalidOperationException($"Error allocating video frame: {getErrorMessage(ret)}");
-                                    ffmpeg.sws_scale(convertContext, newFrame->data, newFrame->linesize, 0, codecContext->height,
-                                        convDstData, convDstLineSize);
+                                ffmpeg.sws_scale(convertContext, newFrame->data, newFrame->linesize, 0, codecContext->height,
+                                    convDstData, convDstLineSize);
 
-                                    var outFrameData = new byte_ptrArray8();
-                                    outFrameData.UpdateFrom(convDstData);
-                                    var linesize = new int_array8();
-                                    linesize.UpdateFrom(convDstLineSize);
+                                var outFrameData = new byte_ptrArray8();
+                                outFrameData.UpdateFrom(convDstData);
+                                var linesize = new int_array8();
+                                linesize.UpdateFrom(convDstLineSize);
 
-                                    outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
-                                    outFrame->width = codecContext->width;
-                                    outFrame->height = codecContext->height;
-                                    outFrame->data = outFrameData;
-                                    outFrame->linesize = linesize;
-                                }
-                                else
-                                    outFrame = newFrame;
+                                outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
+                                outFrame->width = codecContext->width;
+                                outFrame->height = codecContext->height;
+                                outFrame->data = outFrameData;
+                                outFrame->linesize = linesize;
 
                                 if (!availableTextures.TryDequeue(out var tex))
                                     tex = new Texture(new VideoTexture(codecParams.width, codecParams.height));
@@ -579,8 +564,6 @@ namespace osu.Framework.Graphics.Video
             }
             finally
             {
-                // ffmpeg.av_packet_free(&packet);
-
                 if (state != DecoderState.Faulted)
                     state = DecoderState.Stopped;
             }
@@ -699,6 +682,9 @@ namespace osu.Framework.Graphics.Video
             {
                 fixed (AVFormatContext** ptr = &formatContext)
                     ffmpeg.avformat_close_input(ptr);
+
+                fixed (AVPacket** ptr = &packet)
+                    ffmpeg.av_packet_free(ptr);
             }
 
             seekCallback = null;
