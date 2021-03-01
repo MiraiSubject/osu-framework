@@ -134,8 +134,9 @@ namespace osu.Framework.Graphics.Video
         /// </summary>
         /// <param name="filename">The path to the file that should be decoded.</param>
         /// <param name="scheduler">The <see cref="Scheduler"/> to use when scheduling tasks from the decoder thread.</param>
-        public VideoDecoder(string filename, Scheduler scheduler)
-            : this(File.OpenRead(filename), scheduler)
+        /// <param name="hwDevice">The <see cref="AVHWDeviceType"/> to use when decoding the video.</param>
+        public VideoDecoder(string filename, Scheduler scheduler, AVHWDeviceType hwDevice)
+            : this(File.OpenRead(filename), scheduler, hwDevice)
         {
         }
 
@@ -145,7 +146,7 @@ namespace osu.Framework.Graphics.Video
         /// <param name="videoStream">The stream that should be decoded.</param>
         /// <param name="scheduler">The <see cref="Scheduler"/> to use when scheduling tasks from the decoder thread.</param>
         /// <param name="hwDevice">The <see cref="AVHWDeviceType"/> to use when decoding the video.</param>
-        public VideoDecoder(Stream videoStream, Scheduler scheduler, AVHWDeviceType hwDevice = AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2)
+        public VideoDecoder(Stream videoStream, Scheduler scheduler, AVHWDeviceType hwDevice)
         {
             ffmpeg = CreateFuncs();
             hWDeviceType = hwDevice;
