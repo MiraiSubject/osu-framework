@@ -564,6 +564,8 @@ namespace osu.Framework.Graphics.Video
             }
             finally
             {
+                ffmpeg.av_frame_free(&outFrame);
+
                 if (state != DecoderState.Faulted)
                     state = DecoderState.Stopped;
             }
@@ -682,9 +684,6 @@ namespace osu.Framework.Graphics.Video
             {
                 fixed (AVFormatContext** ptr = &formatContext)
                     ffmpeg.avformat_close_input(ptr);
-
-                fixed (AVPacket** ptr = &packet)
-                    ffmpeg.av_packet_free(ptr);
             }
 
             seekCallback = null;
@@ -699,6 +698,24 @@ namespace osu.Framework.Graphics.Video
 
             if (convertContext != null)
                 ffmpeg.sws_freeContext(convertContext);
+
+            if (packet != null)
+            {
+                fixed (AVPacket** ptr = &packet)
+                    ffmpeg.av_packet_free(ptr);
+            }
+
+            if (frame != null)
+            {
+                fixed (AVFrame** ptr = &frame)
+                    ffmpeg.av_frame_free(ptr);
+            }
+
+            if (receivedFrame != null)
+            {
+                fixed (AVFrame** ptr = &receivedFrame)
+                    ffmpeg.av_frame_free(ptr);
+            }
 
             while (decodedFrames.TryDequeue(out var f))
                 f.Texture.Dispose();
