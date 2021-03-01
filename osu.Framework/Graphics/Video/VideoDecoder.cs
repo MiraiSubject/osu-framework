@@ -87,7 +87,7 @@ namespace osu.Framework.Graphics.Video
         private AVPacket* packet;
         private AVFrame* frame;
         private AVFrame* receivedFrame;
-        private int _streamIndex;
+        private int streamIndex;
         private byte* contextBuffer;
         private byte[] managedContextBuffer;
 
@@ -175,7 +175,7 @@ namespace osu.Framework.Graphics.Video
                 ffmpeg.avcodec_flush_buffers(codecContext);
                 skipOutputUntilTime = targetTimestamp;
                 decodedFrames.Clear();
- 
+
                 seekEvent.Set();
             });
         }
@@ -259,7 +259,7 @@ namespace osu.Framework.Graphics.Video
             if (stream == null)
                 return Matrix3.Zero;
 
-            switch (stream->codec->colorspace)
+            switch (codecParams.color_space)
             {
                 case AVColorSpace.AVCOL_SPC_BT709:
                     return new Matrix3(1.164f, 1.164f, 1.164f,
@@ -381,10 +381,10 @@ namespace osu.Framework.Graphics.Video
 
             AVCodec* codec = null;
 
-            _streamIndex = ffmpeg.av_find_best_stream(formatContext, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
-            bool streamFound = _streamIndex >= 0;
+            streamIndex = ffmpeg.av_find_best_stream(formatContext, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+            bool streamFound = streamIndex >= 0;
             if (!streamFound)
-                throw new InvalidOperationException($"Could not find valid stream: {getErrorMessage(_streamIndex)}");
+                throw new InvalidOperationException($"Could not find valid stream: {getErrorMessage(streamIndex)}");
 
             codecContext = ffmpeg.avcodec_alloc_context3(codec);
 
@@ -397,7 +397,7 @@ namespace osu.Framework.Graphics.Video
                 Logger.Log("Initialised hardware device context.");
             }
 
-            stream = formatContext->streams[_streamIndex];
+            stream = formatContext->streams[streamIndex];
             duration = stream->duration <= 0 ? formatContext->duration : stream->duration;
             timeBaseInSeconds = stream->time_base.GetValue();
 
@@ -417,7 +417,7 @@ namespace osu.Framework.Graphics.Video
             frame = ffmpeg.av_frame_alloc();
         }
 
-        private AVFrame* TryDecodeNextFrame()
+        private AVFrame* tryDecodeNextFrame()
         {
             ffmpeg.av_frame_unref(frame);
             ffmpeg.av_frame_unref(receivedFrame);
@@ -450,7 +450,7 @@ namespace osu.Framework.Graphics.Video
                             state = DecoderState.Ready;
                             Thread.Sleep(1);
                         }
-                    } while (packet->stream_index != _streamIndex);
+                    } while (packet->stream_index != streamIndex);
 
                     int sendPacket = ffmpeg.avcodec_send_packet(codecContext, packet);
                     if (sendPacket != 0)
@@ -492,7 +492,7 @@ namespace osu.Framework.Graphics.Video
 
                     if (decodedFrames.Count < max_pending_frames)
                     {
-                        var newFrame = TryDecodeNextFrame();
+                        var newFrame = tryDecodeNextFrame();
 
                         // end of file or other error
                         if (newFrame != null)
