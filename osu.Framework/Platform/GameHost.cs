@@ -1018,7 +1018,8 @@ namespace osu.Framework.Platform
         /// <param name="scheduler">The <see cref="Scheduler"/> to use when scheduling tasks from the decoder thread.</param>
         /// <param name="hwDevice">The <see cref="AVHWDeviceType"/> to use when decoding the video.</param>
         /// <returns>An instance of <see cref="VideoDecoder"/> initialised with the given stream.</returns>
-        public virtual VideoDecoder CreateVideoDecoder(Stream stream, Scheduler scheduler, AVHWDeviceType hwDevice = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE) => new VideoDecoder(stream, scheduler, hwDevice);
+        public virtual VideoDecoder CreateVideoDecoder(Stream stream, Scheduler scheduler, AVHWDeviceType hwDevice = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE) =>
+            VideoDecoder.CreateVideoDecoder(stream, scheduler, hwDevice); //new VideoDecoder(stream, scheduler, hwDevice);
 
         /// <summary>
         /// Creates the <see cref="ThreadRunner"/> to run the threads of this <see cref="GameHost"/>.
