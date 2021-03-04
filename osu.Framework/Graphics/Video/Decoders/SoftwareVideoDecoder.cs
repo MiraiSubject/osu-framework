@@ -6,7 +6,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FFmpeg.AutoGen;
@@ -24,9 +23,9 @@ namespace osu.Framework.Graphics.Video.Decoders
         private CancellationTokenSource decodingTaskCancellationTokenSource = new CancellationTokenSource();
         private Task decodingTask;
 
-        private ConcurrentQueue<Texture> availableTextures = new ConcurrentQueue<Texture>();
-        private ConcurrentQueue<DecodedFrame> decodedFrames = new ConcurrentQueue<DecodedFrame>();
-        private ConcurrentQueue<Action> decoderActions = new ConcurrentQueue<Action>();
+        private readonly ConcurrentQueue<Texture> availableTextures = new ConcurrentQueue<Texture>();
+        private readonly ConcurrentQueue<DecodedFrame> decodedFrames = new ConcurrentQueue<DecodedFrame>();
+        private readonly ConcurrentQueue<Action> decoderActions = new ConcurrentQueue<Action>();
 
         private readonly ManualResetEventSlim seekEvent = new ManualResetEventSlim(true);
 
@@ -40,10 +39,70 @@ namespace osu.Framework.Graphics.Video.Decoders
             handle = new ObjectHandle<SoftwareVideoDecoder>(this, GCHandleType.Normal);
         }
 
+        #region Disposal
+
+        private bool disposed;
+
         public override void Dispose()
         {
-            throw new System.NotImplementedException();
+            if (disposed)
+                return;
+
+            disposed = true;
+
+            decoderActions.Clear();
+            StopDecoding(true);
+
+            if (fmtCtx != null && opened)
+            {
+                fixed (AVFormatContext** ptr = &fmtCtx)
+                {
+                    FFmpeg.avformat_close_input(ptr);
+                }
+            }
+
+            seekCallback = null;
+            readPacketCallback = null;
+            managedCtxBuffer = null;
+
+            Stream.Dispose();
+            Stream = null;
+
+            buffer = null;
+
+            if (swsCtx != null)
+                FFmpeg.sws_freeContext(swsCtx);
+
+            if (packet != null)
+            {
+                fixed (AVPacket** ptr = &packet)
+                    FFmpeg.av_packet_free(ptr);
+            }
+
+            if (frame != null)
+            {
+                fixed (AVFrame** ptr = &frame)
+                    FFmpeg.av_frame_free(ptr);
+            }
+
+            if (receivedFrame != null)
+            {
+                fixed (AVFrame** ptr = &receivedFrame)
+                    FFmpeg.av_frame_free(ptr);
+            }
+
+            while (decodedFrames.TryDequeue(out var f))
+                f.Texture.Dispose();
+
+            while (availableTextures.TryDequeue(out var t))
+                t.Dispose();
+
+            handle.Dispose();
+
+            seekEvent.Dispose();
         }
+
+        #endregion
 
         public override double Duration => stream == null ? 0 : duration * timebase * 1000;
 
@@ -58,21 +117,24 @@ namespace osu.Framework.Graphics.Video.Decoders
         {
             Logger.Log("Starting SoftwareVideoDecoder");
 
-            try
+            if (fmtCtx == null)
             {
-                prepareDecoding();
-            }
-            catch (InvalidOperationException e)
-            {
-                Logger.Log($"SoftwareVideoDecoder setup faulted: {e}");
-                RawState = DecoderState.Faulted;
-                return;
-            }
-            catch (DllNotFoundException e)
-            {
-                Logger.Log($"FFmpeg DLL not found: {e}");
-                RawState = DecoderState.Faulted;
-                return;
+                try
+                {
+                    prepareDecoding();
+                }
+                catch (InvalidOperationException e)
+                {
+                    Logger.Log($"SoftwareVideoDecoder setup faulted: {e}");
+                    RawState = DecoderState.Faulted;
+                    return;
+                }
+                catch (DllNotFoundException e)
+                {
+                    Logger.Log($"FFmpeg DLL not found: {e}");
+                    RawState = DecoderState.Faulted;
+                    return;
+                }
             }
 
             decodingTask = Task.Factory.StartNew(
@@ -125,17 +187,148 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         public override void ReturnFrames(IEnumerable<DecodedFrame> frames)
         {
-            throw new NotImplementedException();
+            foreach (var f in frames)
+            {
+                ((VideoTexture)f.Texture.TextureGL).FlushUploads();
+                availableTextures.Enqueue(f.Texture);
+            }
         }
 
         public override IEnumerable<DecodedFrame> GetDecodedFrames()
         {
-            throw new NotImplementedException();
+            seekEvent.Wait();
+
+            var frames = new List<DecodedFrame>(decodedFrames.Count);
+            while (decodedFrames.TryDequeue(out var df))
+                frames.Add(df);
+
+            return frames;
         }
+
+        private AVFrame* decodeNextFrame()
+        {
+            FFmpeg.av_frame_unref(frame);
+            FFmpeg.av_frame_unref(receivedFrame);
+
+            int receiveError;
+
+            do
+            {
+                try
+                {
+                    int res;
+                    do
+                    {
+                        res = FFmpeg.av_read_frame(fmtCtx, packet);
+
+                        if (res != ffmpeg.AVERROR_EOF)
+                        {
+                            if (res >= 0)
+                                continue;
+
+                            RawState = DecoderState.Ready;
+                            Thread.Sleep(1);
+                        }
+                        else
+                        {
+                            // EOF
+                            Logger.Log($"EOF, Looping: {Looping}, previous time: {lastDecodedFrameTime}");
+                            if (Looping)
+                                Seek(0);
+                            else
+                                RawState = DecoderState.EndOfStream;
+
+                            return null;
+                        }
+                    } while (packet->stream_index != streamIndex);
+
+                    res = FFmpeg.avcodec_send_packet(codecCtx, packet);
+                    if (res < 0)
+                        Logger.Log($"Error {GetErrorMessage(res)} sending packet in VideoDecoder");
+                }
+                finally
+                {
+                    // TODO finally?
+                    FFmpeg.av_packet_unref(packet);
+                }
+
+                receiveError = FFmpeg.avcodec_receive_frame(codecCtx, frame);
+            } while (receiveError == ffmpeg.AVERROR(ffmpeg.EAGAIN) && receiveError != 0);
+
+            return frame;
+        }
+
+        private volatile float lastDecodedFrameTime;
 
         private void decodingLoop(CancellationToken token)
         {
-            throw new NotImplementedException();
+            const int max_pending_frames = 3;
+            AVFrame* outFrame = FFmpeg.av_frame_alloc(); // TODO what if exception
+
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    if (decodedFrames.Count < max_pending_frames)
+                    {
+                        AVFrame* newFrame = decodeNextFrame();
+
+                        if (newFrame != null)
+                        {
+                            double frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timebase * 1000;
+
+                            if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
+                            {
+                                skipOutputUntilTime = null;
+
+                                FFmpeg.sws_scale(swsCtx, newFrame->data, newFrame->linesize, 0, codecCtx->height, convDstData, convDstLineSize);
+
+                                var outFrameData = new byte_ptrArray8();
+                                outFrameData.UpdateFrom(convDstData);
+
+                                var linesize = new int_array8();
+                                linesize.UpdateFrom(convDstLineSize);
+
+                                outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
+                                outFrame->width = codecCtx->width;
+                                outFrame->height = codecCtx->height;
+                                outFrame->data = outFrameData;
+                                outFrame->linesize = linesize;
+
+                                if (!availableTextures.TryDequeue(out Texture tex))
+                                {
+                                    tex = new Texture(new VideoTexture(codecParams->width, codecParams->height));
+                                }
+
+                                var upload = new VideoTextureUpload(outFrame);
+
+                                tex.SetData(upload);
+                                decodedFrames.Enqueue(new DecodedFrame { Time = frameTime, Texture = tex });
+                            }
+
+                            lastDecodedFrameTime = (float)frameTime;
+                        }
+                    }
+                    else
+                    {
+                        RawState = DecoderState.Ready;
+                        Thread.Sleep(1); // TODO actually wait
+                    }
+
+                    while (!decoderActions.IsEmpty && !token.IsCancellationRequested)
+                    {
+                        if (decoderActions.TryDequeue(out var cmd))
+                            cmd();
+                    }
+                }
+            }
+            finally
+            {
+                FFmpeg.av_frame_free(&outFrame);
+
+                if (RawState != DecoderState.Faulted)
+                    RawState = DecoderState.Stopped;
+            }
         }
 
         private AVFormatContext* fmtCtx;
@@ -161,8 +354,8 @@ namespace osu.Framework.Graphics.Video.Decoders
         private int streamIndex;
 
         private IntPtr conversionBuffer;
-        private byte_ptrArray4 convDstData = new byte_ptrArray4();
-        private int_array4 convDstLineSize = new int_array4();
+        private byte_ptrArray4 convDstData;
+        private int_array4 convDstLineSize;
 
         private void prepareDecoding()
         {
@@ -183,13 +376,11 @@ namespace osu.Framework.Graphics.Video.Decoders
             int res = FFmpeg.avformat_open_input(&ctxPtr, "dummy", null, null);
 
             if (res < 0)
-            {
                 throw new InvalidOperationException($"Error opening file or stream: {GetErrorMessage(res)}");
-            }
 
-            int findStreamInfoResult = ffmpeg.avformat_find_stream_info(fmtCtx, null);
-            if (findStreamInfoResult < 0)
-                throw new InvalidOperationException($"Error finding stream info: {GetErrorMessage(findStreamInfoResult)}");
+            res = ffmpeg.avformat_find_stream_info(fmtCtx, null);
+            if (res < 0)
+                throw new InvalidOperationException($"Error finding stream info: {GetErrorMessage(res)}");
 
             opened = true;
 
@@ -197,9 +388,7 @@ namespace osu.Framework.Graphics.Video.Decoders
             streamIndex = FFmpeg.av_find_best_stream(fmtCtx, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
 
             if (streamIndex < 0)
-            {
                 throw new InvalidOperationException($"Could not find valid stream: {GetErrorMessage(streamIndex)}");
-            }
 
             codecCtx = FFmpeg.avcodec_alloc_context3(codec);
 
@@ -210,20 +399,14 @@ namespace osu.Framework.Graphics.Video.Decoders
             res = FFmpeg.avcodec_parameters_to_context(codecCtx, stream->codecpar);
 
             if (res < 0)
-            {
                 throw new InvalidOperationException($"Error filling codec context with parameters: {GetErrorMessage(res)}");
-            }
 
             codecParams = stream->codecpar;
 
             res = FFmpeg.avcodec_open2(codecCtx, codec, null);
 
             if (res < 0)
-            {
                 throw new InvalidOperationException($"Error trying to open codec with id {codecParams->codec_id}: {GetErrorMessage(res)}");
-            }
-
-            Logger.Log($"Fmt: {codecCtx->pix_fmt}");
 
             prepareFilters();
 
@@ -259,7 +442,7 @@ namespace osu.Framework.Graphics.Video.Decoders
             if (!handle.GetTarget(out SoftwareVideoDecoder decoder))
                 return 0;
 
-            if (bufSize != decoder.managedCtxBuffer.Length)
+            if (bufSize > decoder.managedCtxBuffer.Length)
             {
                 Logger.Log($"Reallocating managed context buffer: {decoder.managedCtxBuffer.Length} -> {bufSize}");
                 decoder.managedCtxBuffer = new byte[bufSize];

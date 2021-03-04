@@ -531,7 +531,7 @@ namespace osu.Framework.Graphics.Video
                                 if (!availableTextures.TryDequeue(out var tex))
                                     tex = new Texture(new VideoTexture(codecParams.width, codecParams.height));
 
-                                var upload = new VideoTextureUpload(outFrame, ffmpeg.av_frame_free);
+                                var upload = new VideoTextureUpload(outFrame);
 
                                 tex.SetData(upload);
                                 decodedFrames.Enqueue(new DecodedFrame { Time = frameTime, Texture = tex });
