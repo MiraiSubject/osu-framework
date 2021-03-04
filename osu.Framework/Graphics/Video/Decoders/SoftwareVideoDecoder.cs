@@ -151,7 +151,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         private SwsContext* swsCtx;
 
-        private byte[] mangedBuffer;
+        private byte[] managedCtxBuffer;
 
         private avio_alloc_context_read_packet readPacketCallback;
         private avio_alloc_context_seek seekCallback;
@@ -171,7 +171,7 @@ namespace osu.Framework.Graphics.Video.Decoders
             AVFormatContext* ctxPtr = FFmpeg.avformat_alloc_context();
             fmtCtx = ctxPtr;
             buffer = (byte*)FFmpeg.av_malloc(buffer_size);
-            mangedBuffer = new byte[buffer_size];
+            managedCtxBuffer = new byte[buffer_size];
 
             readPacketCallback = readPacket;
             seekCallback = seek;
@@ -186,6 +186,10 @@ namespace osu.Framework.Graphics.Video.Decoders
             {
                 throw new InvalidOperationException($"Error opening file or stream: {GetErrorMessage(res)}");
             }
+
+            int findStreamInfoResult = ffmpeg.avformat_find_stream_info(fmtCtx, null);
+            if (findStreamInfoResult < 0)
+                throw new InvalidOperationException($"Error finding stream info: {GetErrorMessage(findStreamInfoResult)}");
 
             opened = true;
 
@@ -253,18 +257,16 @@ namespace osu.Framework.Graphics.Video.Decoders
             var handle = new ObjectHandle<SoftwareVideoDecoder>((IntPtr)opaque);
 
             if (!handle.GetTarget(out SoftwareVideoDecoder decoder))
-            {
                 return 0;
-            }
 
-            if (bufSize != decoder.mangedBuffer.Length)
+            if (bufSize != decoder.managedCtxBuffer.Length)
             {
-                Logger.Log($"Reallocating managed context buffer: {decoder.mangedBuffer.Length} -> {bufSize}");
-                decoder.mangedBuffer = new byte[bufSize];
+                Logger.Log($"Reallocating managed context buffer: {decoder.managedCtxBuffer.Length} -> {bufSize}");
+                decoder.managedCtxBuffer = new byte[bufSize];
             }
 
-            int read = decoder.Stream.Read(decoder.mangedBuffer, 0, bufSize);
-            Marshal.Copy(decoder.mangedBuffer, 0, (IntPtr)buf, read);
+            int read = decoder.Stream.Read(decoder.managedCtxBuffer, 0, bufSize);
+            Marshal.Copy(decoder.managedCtxBuffer, 0, (IntPtr)buf, read);
             return read;
         }
 
