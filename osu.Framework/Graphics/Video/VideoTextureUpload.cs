@@ -36,6 +36,7 @@ namespace osu.Framework.Graphics.Video
         public void Dispose()
         {
         }
+
         #endregion
     }
 }

@@ -14,7 +14,6 @@ using osu.Framework.Graphics.Textures;
 using osu.Framework.Logging;
 using osu.Framework.Platform;
 using osu.Framework.Threading;
-using osuTK;
 
 namespace osu.Framework.Graphics.Video.Decoders
 {
@@ -212,6 +211,7 @@ namespace osu.Framework.Graphics.Video.Decoders
                 try
                 {
                     int res;
+
                     do
                     {
                         res = FFmpeg.av_read_frame(fmtCtx, packet);

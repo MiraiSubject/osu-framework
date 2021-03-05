@@ -10,7 +10,6 @@ using FFmpeg.AutoGen;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics.Video.Decoders;
 using osu.Framework.Threading;
-using osuTK;
 
 namespace osu.Framework.Graphics.Video
 {

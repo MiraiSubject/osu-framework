@@ -8,7 +8,6 @@ using osu.Framework.Graphics.OpenGL;
 using osu.Framework.Graphics.OpenGL.Textures;
 using osu.Framework.Graphics.Textures;
 using osu.Framework.Platform;
-using FFmpeg.AutoGen;
 
 namespace osu.Framework.Graphics.Video
 {
