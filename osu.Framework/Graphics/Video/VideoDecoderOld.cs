@@ -503,6 +503,7 @@ namespace osu.Framework.Graphics.Video
 
                     if (decodedFrames.Count < max_pending_frames)
                     {
+                        ffmpeg.av_frame_unref(outFrame);
                         var newFrame = tryDecodeNextFrame();
 
                         // end of file or other error

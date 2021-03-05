@@ -232,7 +232,7 @@ namespace osu.Framework.Graphics.Video.Decoders
                         else
                         {
                             // EOF
-                            Logger.Log($"EOF, Looping: {Looping}, previous time: {lastDecodedFrameTime}");
+                            //Logger.Log($"EOF, Looping: {Looping}, previous time: {lastDecodedFrameTime}");
                             if (Looping)
                                 Seek(0);
                             else
@@ -296,9 +296,7 @@ namespace osu.Framework.Graphics.Video.Decoders
                                 outFrame->linesize = linesize;
 
                                 if (!availableTextures.TryDequeue(out Texture tex))
-                                {
                                     tex = new Texture(new VideoTexture(codecParams->width, codecParams->height));
-                                }
 
                                 var upload = new VideoTextureUpload(outFrame);
 
@@ -416,7 +414,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         private void prepareFilters()
         {
-            const AVPixelFormat dest_fmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
+            const AVPixelFormat dest_fmt = AVPixelFormat.AV_PIX_FMT_RGBA;
             int w = codecCtx->width;
             int h = codecCtx->height;
 
@@ -425,11 +423,13 @@ namespace osu.Framework.Graphics.Video.Decoders
             // 1 =  SWS_FAST_BILINEAR
             // https://www.ffmpeg.org/doxygen/trunk/swscale_8h_source.html#l00056
             // TODO check input and output format support
-            swsCtx = FFmpeg.sws_getContext(w, h, codecCtx->pix_fmt, w, h,
+            swsCtx = ffmpeg.sws_getContext(w, h, codecCtx->pix_fmt, w, h,
                 dest_fmt, 1, null, null, null);
 
             int bufferSize = ffmpeg.av_image_get_buffer_size(dest_fmt, w, h, 1);
             conversionBuffer = Marshal.AllocHGlobal(bufferSize);
+            convDstData = new byte_ptrArray4();
+            convDstLineSize = new int_array4();
 
             ffmpeg.av_image_fill_arrays(ref convDstData, ref convDstLineSize, (byte*)conversionBuffer, dest_fmt, w, h, 1);
         }
