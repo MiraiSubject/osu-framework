@@ -411,7 +411,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         private void prepareFilters()
         {
-            const AVPixelFormat dest_fmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
+            const AVPixelFormat dest_fmt = AVPixelFormat.AV_PIX_FMT_RGBA;
             int w = codecCtx->width;
             int h = codecCtx->height;
 

@@ -1,7 +1,12 @@
 // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
+using System;
+using System.Diagnostics;
 using System.Diagnostics.Tracing;
+using System.Reflection;
+using osu.Framework.Extensions.TypeExtensions;
+using osu.Framework.Logging;
 
 namespace osu.Framework.Statistics
 {
@@ -32,6 +37,9 @@ namespace osu.Framework.Statistics
         }
 
         private readonly GlobalStatistic<int> statInflight = GlobalStatistics.Get<int>(arraypool_statistics_grouping, "Inflight");
+        private readonly GlobalStatistic<int> statAllocated = GlobalStatistics.Get<int>(arraypool_statistics_grouping, "Allocated");
+        private readonly GlobalStatistic<int> statRented = GlobalStatistics.Get<int>(arraypool_statistics_grouping, "Rented");
+        private readonly GlobalStatistic<int> statReturned = GlobalStatistics.Get<int>(arraypool_statistics_grouping, "Returned");
 
         protected override void OnEventWritten(EventWrittenEventArgs data)
         {
@@ -42,16 +50,16 @@ namespace osu.Framework.Statistics
                     switch ((ArrayPoolEventType)data.EventId)
                     {
                         case ArrayPoolEventType.BufferAllocated:
-                            GlobalStatistics.Get<int>(arraypool_statistics_grouping, "Allocated").Value++;
+                            statAllocated.Value++;
                             break;
 
                         case ArrayPoolEventType.BufferRented:
-                            GlobalStatistics.Get<int>(arraypool_statistics_grouping, "Rented").Value++;
+                            statRented.Value++;
                             statInflight.Value++;
                             break;
 
                         case ArrayPoolEventType.BufferReturned:
-                            GlobalStatistics.Get<int>(arraypool_statistics_grouping, "Returned").Value++;
+                            statReturned.Value++;
 
                             // the listener may have been started while buffers were already rented.
                             if (statInflight.Value > 0)
@@ -77,11 +85,73 @@ namespace osu.Framework.Statistics
                             addStatistic<ulong>("Finalization queue length", data.Payload[9]);
                             addStatistic<uint>("Pinned objects", data.Payload[10]);
                             break;
+
+                        case GCEventType.GCAllocationTick_V2 when data.Payload != null:
+                            string name = (string)data.Payload[5];
+                            if (string.IsNullOrEmpty(name))
+                                break;
+
+                            var allocType = Type.GetType(name, false, false);
+                            if (allocType == null)
+                                break;
+
+                            var finalizeMethod = allocType.GetMethod("Finalize", BindingFlags.NonPublic | BindingFlags.Instance);
+                            Debug.Assert(finalizeMethod != null); // All objects have this.
+
+                            if (finalizeMethod.DeclaringType != typeof(object))
+                                Logger.Log($"Allocated finalizable object: {name}", LoggingTarget.Performance);
+
+                            break;
+
+                        case GCEventType.FinalizeObject when data.Payload != null:
+                            if (data.Payload[0] == null)
+                                break;
+
+                            var type = getTypeFromHandle((IntPtr)data.Payload[0]);
+                            if (type == null)
+                                break;
+
+                            Logger.Log($"Finalizing object: {type.ReadableName()}", LoggingTarget.Performance);
+
+                            break;
                     }
 
                     break;
             }
         }
+
+        /// <summary>
+        /// Retrieves a <see cref="Type"/> from a CLR type id.
+        /// </summary>
+        /// <remarks>
+        /// Attrib: https://stackoverflow.com/questions/26972066/type-from-intptr-handle/54469241#54469241
+        /// </remarks>
+        // ReSharper disable once RedundantUnsafeContext
+        private static unsafe Type getTypeFromHandle(IntPtr handle)
+        {
+#if NET5_0
+            // This is super unsafe code which is dependent upon internal CLR structures.
+            TypedReferenceAccess tr = new TypedReferenceAccess { Type = handle };
+            return __reftype(*(TypedReference*)&tr);
+#else
+            return null;
+#endif
+        }
+
+#if NET5_0
+        /// <summary>
+        /// Matches the internal layout of <see cref="TypedReference"/>.
+        /// See: https://source.dot.net/#System.Private.CoreLib/src/System/TypedReference.cs
+        /// </summary>
+        private struct TypedReferenceAccess
+        {
+            [JetBrains.Annotations.UsedImplicitly]
+            public IntPtr Value;
+
+            [JetBrains.Annotations.UsedImplicitly]
+            public IntPtr Type;
+        }
+#endif
 
         private void addStatistic<T>(string name, object data)
             => GlobalStatistics.Get<T>(gc_statistics_grouping, name).Value = (T)data;
@@ -97,6 +167,8 @@ namespace osu.Framework.Statistics
         {
             GCStart_V1 = 1,
             GCHeapStats_V1 = 4,
+            GCAllocationTick_V2 = 10,
+            FinalizeObject = 29
         }
     }
 }
