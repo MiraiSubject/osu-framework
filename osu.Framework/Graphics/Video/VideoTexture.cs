@@ -8,6 +8,7 @@ using osu.Framework.Graphics.OpenGL;
 using osu.Framework.Graphics.OpenGL.Textures;
 using osu.Framework.Graphics.Textures;
 using osu.Framework.Platform;
+using FFmpeg.AutoGen;
 
 namespace osu.Framework.Graphics.Video
 {
@@ -90,7 +91,7 @@ namespace osu.Framework.Graphics.Video
                         int width = videoUpload.Frame->width;
                         int height = videoUpload.Frame->height;
 
-                        GL.TexImage2D(TextureTarget2d.Texture2D, 0, TextureComponentCount.R8, width, height, 0, PixelFormat.Red, PixelType.UnsignedByte, IntPtr.Zero);
+                        GL.TexImage2D(TextureTarget2d.Texture2D, 0, TextureComponentCount.Rgba, width, height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
 
                         textureSize += width * height;
                     }
@@ -99,7 +100,7 @@ namespace osu.Framework.Graphics.Video
                         int width = (videoUpload.Frame->width + 1) / 2;
                         int height = (videoUpload.Frame->height + 1) / 2;
 
-                        GL.TexImage2D(TextureTarget2d.Texture2D, 0, TextureComponentCount.R8, width, height, 0, PixelFormat.Red, PixelType.UnsignedByte, IntPtr.Zero);
+                        GL.TexImage2D(TextureTarget2d.Texture2D, 0, TextureComponentCount.Rgba, width, height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
 
                         textureSize += width * height;
                     }
@@ -115,13 +116,15 @@ namespace osu.Framework.Graphics.Video
             for (int i = 0; i < textureIds.Length; i++)
             {
                 GLWrapper.BindTexture(textureIds[i]);
+                GL.TexImage2D(TextureTarget2d.Texture2D, 0, TextureComponentCount.Rgba, videoUpload.Frame->width / (i > 0 ? 2 : 1), videoUpload.Frame->height / (i > 0 ? 2 : 1), 0,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, (IntPtr)videoUpload.Frame->data[(uint)i]);
 
-                GL.PixelStore(PixelStoreParameter.UnpackRowLength, videoUpload.Frame->linesize[(uint)i]);
-                GL.TexSubImage2D(TextureTarget2d.Texture2D, 0, 0, 0, videoUpload.Frame->width / (i > 0 ? 2 : 1), videoUpload.Frame->height / (i > 0 ? 2 : 1),
-                    PixelFormat.Red, PixelType.UnsignedByte, (IntPtr)videoUpload.Frame->data[(uint)i]);
+                // GL.PixelStore(PixelStoreParameter.UnpackRowLength, videoUpload.Frame->linesize[(uint)i]);
+                // GL.TexSubImage2D(TextureTarget2d.Texture2D, 0, 0, 0, videoUpload.Frame->width / (i > 0 ? 2 : 1), videoUpload.Frame->height / (i > 0 ? 2 : 1),
+                //     PixelFormat.Rgba, PixelType.UnsignedByte, (IntPtr)videoUpload.Frame->data[(uint)i]);
             }
 
-            GL.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+            //GL.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
 
             UploadComplete = true;
         }

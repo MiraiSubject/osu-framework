@@ -10,7 +10,7 @@ namespace osu.Framework.Graphics.Video
     public unsafe class VideoTextureUpload : ArrayPoolTextureUpload
     {
         public AVFrame* Frame;
-        public override PixelFormat Format => PixelFormat.Red;
+        public override PixelFormat Format => PixelFormat.Rgba;
 
         /// <summary>
         /// Sets the frame cotaining the data to be uploaded

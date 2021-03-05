@@ -289,7 +289,7 @@ namespace osu.Framework.Graphics.Video.Decoders
                                 var linesize = new int_array8();
                                 linesize.UpdateFrom(convDstLineSize);
 
-                                outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
+                                outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
                                 outFrame->width = codecCtx->width;
                                 outFrame->height = codecCtx->height;
                                 outFrame->data = outFrameData;
