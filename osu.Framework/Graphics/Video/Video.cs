@@ -77,11 +77,6 @@ namespace osu.Framework.Graphics.Video
         internal VideoSprite Sprite;
 
         /// <summary>
-        /// YUV->RGB conversion matrix based on the video colorspace
-        /// </summary>
-        public Matrix3 ConversionMatrix => decoder.GetConversionMatrix();
-
-        /// <summary>
         /// Creates a new <see cref="Video"/>.
         /// </summary>
         /// <param name="filename">The video file.</param>

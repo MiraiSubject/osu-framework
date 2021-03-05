@@ -78,8 +78,6 @@ namespace osu.Framework.Graphics.Video
 
         public abstract bool Looping { get; internal set; }
 
-        public abstract Matrix3 GetConversionMatrix();
-
         public abstract void StartDecoding();
 
         public abstract void StopDecoding(bool wait);

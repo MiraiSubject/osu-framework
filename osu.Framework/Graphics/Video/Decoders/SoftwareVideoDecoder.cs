@@ -108,11 +108,6 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         public override bool Looping { get; internal set; }
 
-        public override Matrix3 GetConversionMatrix()
-        {
-            return Matrix3.Identity;
-        }
-
         public override void StartDecoding()
         {
             Logger.Log("Starting SoftwareVideoDecoder");

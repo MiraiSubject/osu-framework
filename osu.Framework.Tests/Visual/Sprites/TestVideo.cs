@@ -4,6 +4,7 @@
 using System.IO;
 using System.Threading;
 using osu.Framework.Graphics;
+using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.Video;
 using osu.Framework.IO.Network;
 
@@ -57,7 +58,7 @@ namespace osu.Framework.Tests.Visual.Sprites
             protected override DrawNode CreateDrawNode() => new TestVideoSpriteDrawNode(video);
         }
 
-        private class TestVideoSpriteDrawNode : VideoSpriteDrawNode
+        private class TestVideoSpriteDrawNode : SpriteDrawNode
         {
             private readonly TestVideo source;
 
@@ -66,7 +67,7 @@ namespace osu.Framework.Tests.Visual.Sprites
             private bool? useRoundedShader;
 
             public TestVideoSpriteDrawNode(TestVideo source)
-                : base(source)
+                : base(source.Sprite)
             {
                 this.source = source;
             }
