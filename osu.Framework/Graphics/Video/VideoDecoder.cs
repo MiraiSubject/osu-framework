@@ -23,6 +23,39 @@ namespace osu.Framework.Graphics.Video
             return new SoftwareVideoDecoder(stream, scheduler);
         }
 
+#if NET5_0
+        static VideoDecoder()
+        {
+            ffmpeg.GetOrLoadLibrary = name =>
+            {
+                int version = ffmpeg.LibraryVersionMap[name];
+
+                // "lib" prefix and extensions are resolved by .net core
+                string libraryName = RuntimeInfo.OS switch
+                {
+                    RuntimeInfo.Platform.macOS => $"{name}.{version}",
+                    RuntimeInfo.Platform.Windows => $"{name}-{version}",
+                    RuntimeInfo.Platform.Linux => name,
+                    _ => null
+                };
+
+                if (libraryName == null)
+                {
+                    throw new NotSupportedException($"FFmpeg loading is not supported on {RuntimeInfo.OS} and .NET 5.0");
+                }
+
+                var assembly = System.Reflection.Assembly.GetEntryAssembly();
+
+                if (assembly == null)
+                {
+                    throw new NotSupportedException("FFmpeg must not be loaded through native code");
+                }
+
+                return NativeLibrary.Load(libraryName, assembly, DllImportSearchPath.UseDllDirectoryForDependencies | DllImportSearchPath.SafeDirectories);
+            };
+        }
+#endif
+
         protected Stream Stream;
         protected readonly Scheduler Scheduler;
 
@@ -87,81 +120,27 @@ namespace osu.Framework.Graphics.Video
 
         public abstract IEnumerable<DecodedFrame> GetDecodedFrames();
 
-        protected virtual FFmpegFuncs FFmpeg { get; } = loadFFmpeg();
-
-        protected string GetErrorMessage(int code)
+        /// <summary>
+        /// Formats an error message from an error code.
+        /// </summary>
+        /// <param name="code">The error code to format a string for</param>
+        /// <returns>String representation of the error code.</returns>
+        protected static string GetErrorMessage(int code)
         {
-            const ulong buffer_size = 256;
-            byte[] buffer = new byte[buffer_size];
+            byte[] buffer = new byte[ffmpeg.AV_ERROR_MAX_STRING_SIZE];
 
             int strErrorCode;
 
             fixed (byte* bufPtr = buffer)
             {
-                strErrorCode = FFmpeg.av_strerror(code, bufPtr, buffer_size);
+                strErrorCode = ffmpeg.av_strerror(code, bufPtr, (ulong)buffer.Length);
             }
 
             if (strErrorCode < 0)
                 return $"{code} (av_strerror failed with code {strErrorCode})";
 
             var messageLength = Math.Max(0, Array.IndexOf(buffer, (byte)0));
-            return Encoding.ASCII.GetString(buffer[..messageLength]);
-        }
-
-        private static FFmpegFuncs loadFFmpeg()
-        {
-#if NET5_0
-            ffmpeg.GetOrLoadLibrary = name =>
-            {
-                int version = ffmpeg.LibraryVersionMap[name];
-
-                // "lib" prefix and extensions are resolved by .net core
-                string libraryName = RuntimeInfo.OS switch
-                {
-                    RuntimeInfo.Platform.macOS => $"{name}.{version}",
-                    RuntimeInfo.Platform.Windows => $"{name}-{version}",
-                    RuntimeInfo.Platform.Linux => name,
-                    _ => null
-                };
-
-                return NativeLibrary.Load(libraryName, System.Reflection.Assembly.GetEntryAssembly(), DllImportSearchPath.UseDllDirectoryForDependencies | DllImportSearchPath.SafeDirectories);
-            };
-#endif
-
-            return new FFmpegFuncs
-            {
-                av_frame_alloc = ffmpeg.av_frame_alloc,
-                av_frame_free = ffmpeg.av_frame_free,
-                av_frame_unref = ffmpeg.av_frame_unref,
-                av_frame_get_buffer = ffmpeg.av_frame_get_buffer,
-                av_strdup = ffmpeg.av_strdup,
-                av_strerror = ffmpeg.av_strerror,
-                av_malloc = ffmpeg.av_malloc,
-                av_packet_alloc = ffmpeg.av_packet_alloc,
-                av_packet_unref = ffmpeg.av_packet_unref,
-                av_packet_free = ffmpeg.av_packet_free,
-                av_read_frame = ffmpeg.av_read_frame,
-                av_seek_frame = ffmpeg.av_seek_frame,
-                avcodec_find_decoder = ffmpeg.avcodec_find_decoder,
-                avcodec_open2 = ffmpeg.avcodec_open2,
-                avcodec_receive_frame = ffmpeg.avcodec_receive_frame,
-                avcodec_send_packet = ffmpeg.avcodec_send_packet,
-                avformat_alloc_context = ffmpeg.avformat_alloc_context,
-                avformat_close_input = ffmpeg.avformat_close_input,
-                avformat_find_stream_info = ffmpeg.avformat_find_stream_info,
-                avformat_open_input = ffmpeg.avformat_open_input,
-                avio_alloc_context = ffmpeg.avio_alloc_context,
-                sws_freeContext = ffmpeg.sws_freeContext,
-                sws_getContext = ffmpeg.sws_getContext,
-                sws_scale = ffmpeg.sws_scale,
-                av_hwdevice_iterate_types = ffmpeg.av_hwdevice_iterate_types,
-                av_hwdevice_ctx_create = ffmpeg.av_hwdevice_ctx_create,
-                av_find_best_stream = ffmpeg.av_find_best_stream,
-                avcodec_alloc_context3 = ffmpeg.avcodec_alloc_context3,
-                av_hwframe_transfer_data = ffmpeg.av_hwframe_transfer_data,
-                avcodec_parameters_to_context = ffmpeg.avcodec_parameters_to_context,
-                avcodec_flush_buffers = ffmpeg.avcodec_flush_buffers
-            };
+            return Encoding.UTF8.GetString(buffer[..messageLength]);
         }
 
         /// <summary>

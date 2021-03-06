@@ -20,7 +20,7 @@ namespace osu.Framework.Graphics.Video
 
         public RectangleI Bounds { get; set; }
 
-        public PixelFormat Format => PixelFormat.Red;
+        public PixelFormat Format => PixelFormat.Rgba;
 
         /// <summary>
         /// Sets the frame containing the data to be uploaded.
