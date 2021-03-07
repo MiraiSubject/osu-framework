@@ -9,10 +9,8 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FFmpeg.AutoGen;
-using osu.Framework.Allocation;
 using osu.Framework.Graphics.Textures;
 using osu.Framework.Logging;
-using osu.Framework.Platform;
 using osu.Framework.Threading;
 
 namespace osu.Framework.Graphics.Video.Decoders
@@ -28,26 +26,21 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         private readonly ManualResetEventSlim seekEvent = new ManualResetEventSlim(true);
 
-        private ObjectHandle<SoftwareVideoDecoder> handle;
-
         private double? skipOutputUntilTime;
 
         public SoftwareVideoDecoder(Stream stream, Scheduler scheduler)
             : base(stream, scheduler)
         {
-            handle = new ObjectHandle<SoftwareVideoDecoder>(this, GCHandleType.Normal);
         }
 
         #region Disposal
 
-        private bool disposed;
-
         public override void Dispose()
         {
-            if (disposed)
+            if (Disposed)
                 return;
 
-            disposed = true;
+            base.Dispose();
 
             StopDecoding(true);
             decoderActions.Dispose();
@@ -95,8 +88,6 @@ namespace osu.Framework.Graphics.Video.Decoders
 
             while (availableTextures.TryDequeue(out var t))
                 t.Dispose();
-
-            handle.Dispose();
 
             seekEvent.Dispose();
         }
@@ -374,10 +365,10 @@ namespace osu.Framework.Graphics.Video.Decoders
             buffer = (byte*)ffmpeg.av_malloc(buffer_size);
             managedCtxBuffer = new byte[buffer_size];
 
-            readPacketCallback = readPacket;
-            seekCallback = seek;
+            readPacketCallback = RawRead;
+            seekCallback = RawSeek;
 
-            fmtCtx->pb = ffmpeg.avio_alloc_context(buffer, buffer_size, 0, (void*)handle.Handle, readPacketCallback, null, seekCallback);
+            fmtCtx->pb = ffmpeg.avio_alloc_context(buffer, buffer_size, 0, (void*)Handle.Handle, readPacketCallback, null, seekCallback);
 
             receivedFrame = ffmpeg.av_frame_alloc();
 
@@ -428,7 +419,7 @@ namespace osu.Framework.Graphics.Video.Decoders
             int w = CodecCtx->width;
             int h = CodecCtx->height;
 
-            Logger.Log($"From {CodecCtx->pix_fmt} to {dest_fmt}");
+            Logger.Log($"Conversion is from {CodecCtx->pix_fmt} to {dest_fmt}");
 
             // 1 =  SWS_FAST_BILINEAR
             // https://www.ffmpeg.org/doxygen/trunk/swscale_8h_source.html#l00056
@@ -440,59 +431,6 @@ namespace osu.Framework.Graphics.Video.Decoders
             conversionBuffer = Marshal.AllocHGlobal(bufferSize);
 
             ffmpeg.av_image_fill_arrays(ref convDstData, ref convDstLineSize, (byte*)conversionBuffer, dest_fmt, w, h, 1);
-        }
-
-        [MonoPInvokeCallback(typeof(avio_alloc_context_read_packet))]
-        private static int readPacket(void* opaque, byte* buf, int bufSize)
-        {
-            var handle = new ObjectHandle<SoftwareVideoDecoder>((IntPtr)opaque);
-
-            if (!handle.GetTarget(out SoftwareVideoDecoder decoder))
-                return 0;
-
-            if (bufSize > decoder.managedCtxBuffer.Length)
-            {
-                Logger.Log($"Reallocating managed context buffer: {decoder.managedCtxBuffer.Length} -> {bufSize}");
-                decoder.managedCtxBuffer = new byte[bufSize];
-            }
-
-            int read = decoder.Stream.Read(decoder.managedCtxBuffer, 0, bufSize);
-            Marshal.Copy(decoder.managedCtxBuffer, 0, (IntPtr)buf, read);
-            return read;
-        }
-
-        [MonoPInvokeCallback(typeof(avio_alloc_context_seek))]
-        private static long seek(void* opaque, long offset, int whence)
-        {
-            var handle = new ObjectHandle<SoftwareVideoDecoder>((IntPtr)opaque);
-            if (!handle.GetTarget(out SoftwareVideoDecoder decoder))
-                return -1;
-
-            if (!decoder.Stream.CanSeek)
-                throw new InvalidOperationException("Tried seeking on a video sourced by a non-seekable stream.");
-
-            switch (whence)
-            {
-                case StdIo.SEEK_CUR:
-                    decoder.Stream.Seek(offset, SeekOrigin.Current);
-                    break;
-
-                case StdIo.SEEK_END:
-                    decoder.Stream.Seek(offset, SeekOrigin.End);
-                    break;
-
-                case StdIo.SEEK_SET:
-                    decoder.Stream.Seek(offset, SeekOrigin.Begin);
-                    break;
-
-                case ffmpeg.AVSEEK_SIZE:
-                    return decoder.Stream.Length;
-
-                default:
-                    return -1;
-            }
-
-            return decoder.Stream.Position;
         }
     }
 }
