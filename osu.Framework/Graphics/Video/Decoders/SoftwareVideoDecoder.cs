@@ -17,13 +17,34 @@ namespace osu.Framework.Graphics.Video.Decoders
 {
     public unsafe class SoftwareVideoDecoder : VideoDecoder
     {
-        private CancellationTokenSource decodingTaskCancellationTokenSource = new CancellationTokenSource();
+        /// <summary>
+        /// Cancellation token used to cancel the asynchronous decoding task
+        /// </summary>
+        private CancellationTokenSource decodingTaskToken = new CancellationTokenSource(); // TODO used in a few non-epic ways atm
+
+        /// <summary>
+        /// Separate thread which performs the actual video decoding
+        /// </summary>
         private Task decodingTask;
 
+        /// <summary>
+        /// Pool which contains all textures ussed by the decoder
+        /// </summary>
         private readonly ConcurrentQueue<Texture> availableTextures = new ConcurrentQueue<Texture>();
+
+        /// <summary>
+        /// Queue which contains all buffered decoded frames
+        /// </summary>
         private readonly ConcurrentNotifyQueue<DecodedFrame> decodedFrames = new ConcurrentNotifyQueue<DecodedFrame>();
+
+        /// <summary>
+        /// Queue which contains all actions that should be executed on the decoder thread
+        /// </summary>
         private readonly BlockingCollection<Action> decoderActions = new BlockingCollection<Action>();
 
+        /// <summary>
+        /// Event to pause frame retrieval while a seek is occuring
+        /// </summary>
         private readonly ManualResetEventSlim seekEvent = new ManualResetEventSlim(true);
 
         private double? skipOutputUntilTime;
@@ -52,10 +73,6 @@ namespace osu.Framework.Graphics.Video.Decoders
                     ffmpeg.avformat_close_input(ptr);
                 }
             }
-
-            seekCallback = null;
-            readPacketCallback = null;
-            managedCtxBuffer = null;
 
             Stream.Dispose();
             Stream = null;
@@ -98,66 +115,65 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         public override bool Looping { get; internal set; }
 
-        public override void StartDecoding()
+        /// <summary>
+        /// Prepare the internal state and start the decoding in a separate thread
+        /// </summary>
+        protected override void StartDecodingProtected()
         {
-            Logger.Log("Starting SoftwareVideoDecoder");
-
-            if (fmtCtx == null)
+            try
             {
-                try
-                {
-                    prepareDecoding();
-                }
-                catch (InvalidOperationException e)
-                {
-                    Logger.Log($"SoftwareVideoDecoder setup faulted: {e}");
-                    RawState = DecoderState.Faulted;
-                    return;
-                }
-                catch (DllNotFoundException e)
-                {
-                    Logger.Log($"ffmpeg DLL not found: {e}");
-                    RawState = DecoderState.Faulted;
-                    return;
-                }
+                prepareDecoding();
+                prepareFilters();
+
+                // Run decoding loop on a separate thread
+                decodingTask = Task.Factory.StartNew(
+                    decodingLoop,
+                    decodingTaskToken.Token,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
             }
-
-            decodingTask = Task.Factory.StartNew(
-                () => decodingLoop(decodingTaskCancellationTokenSource.Token),
-                decodingTaskCancellationTokenSource.Token,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
-
-            Logger.Log("Started SoftwareVideoDecoder");
+            catch (InvalidOperationException e)
+            {
+                Logger.Log($"SoftwareVideoDecoder setup faulted: {e}");
+                RawState = DecoderState.Faulted;
+            }
+            catch (DllNotFoundException e)
+            {
+                Logger.Log($"ffmpeg DLL not found: {e}");
+                RawState = DecoderState.Faulted;
+            }
         }
 
-        public override void StopDecoding(bool wait)
+        /// <summary>
+        /// Stop the decoding thread, but don't free up resources
+        /// </summary>
+        /// <param name="wait">Whether to wait for the decoding thread to actually finsh</param>
+        protected override void StopDecodingProtected(bool wait)
         {
-            if (decodingTask == null)
-            {
-                return;
-            }
-
-            decodingTaskCancellationTokenSource.Cancel();
+            decodingTaskToken.Cancel();
 
             if (wait)
-            {
                 decodingTask.Wait();
-            }
 
+            // No need to dispose:
+            // https://devblogs.microsoft.com/pfxteam/do-i-need-to-dispose-of-tasks/
             decodingTask = null;
-            decodingTaskCancellationTokenSource.Dispose();
-            decodingTaskCancellationTokenSource = new CancellationTokenSource();
+
+            decodingTaskToken.Dispose();
+            decodingTaskToken = new CancellationTokenSource();
 
             RawState = DecoderState.Ready;
         }
 
+        /// <summary>
+        /// Seeks to a given position inside the video stream
+        /// </summary>
+        /// <param name="pos">Position in seconds to seek to</param>
         public override void Seek(double pos)
         {
             if (!CanSeek)
-            {
                 throw new InvalidOperationException("This decoder cannot seek because the underlying stream used to decode the video does not support seeking.");
-            }
+
 
             seekEvent.Reset();
             decoderActions.Add(() =>
@@ -182,6 +198,7 @@ namespace osu.Framework.Graphics.Video.Decoders
                     decodeSingleFrame();
                 }
 
+                // Allow waiting GetDecodedFrames calls to continue
                 seekEvent.Set();
             });
         }
@@ -305,14 +322,14 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         private void frameDecodeCallback(object sender, EventArgs _)
         {
-            if (!decodingTaskCancellationTokenSource.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < max_pending_frames)
+            if (!decodingTaskToken.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < max_pending_frames)
             {
                 // Insert an action that decodes a frame into the queue
                 decoderActions.Add(decodeSingleFrame);
             }
         }
 
-        private void decodingLoop(CancellationToken token)
+        private void decodingLoop()
         {
             outFrame = ffmpeg.av_frame_alloc(); // TODO what if exception
             outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
@@ -324,19 +341,13 @@ namespace osu.Framework.Graphics.Video.Decoders
                 decodedFrames.ItemRemoved += frameDecodeCallback;
 
                 // Decode initial frames
-                for (int i = 0; i < max_pending_frames; ++i)
-                {
+                while (decodedFrames.Count < max_pending_frames)
                     decodeSingleFrame();
-                }
 
-                while (!token.IsCancellationRequested)
-                {
-                    Action cmd = decoderActions.Take(token);
-
-                    cmd();
-                }
+                while (!decodingTaskToken.IsCancellationRequested)
+                    decoderActions.Take(decodingTaskToken.Token)();
             }
-            catch (OperationCanceledException e) when (e.CancellationToken == token)
+            catch (OperationCanceledException e) when (e.CancellationToken == decodingTaskToken.Token)
             {
                 // pass
             }
@@ -365,11 +376,6 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         private SwsContext* swsCtx;
 
-        private byte[] managedCtxBuffer;
-
-        private avio_alloc_context_read_packet readPacketCallback;
-        private avio_alloc_context_seek seekCallback;
-
         private bool opened;
 
         private int streamIndex;
@@ -385,12 +391,8 @@ namespace osu.Framework.Graphics.Video.Decoders
             AVFormatContext* ctxPtr = ffmpeg.avformat_alloc_context();
             fmtCtx = ctxPtr;
             buffer = (byte*)ffmpeg.av_malloc(buffer_size);
-            managedCtxBuffer = new byte[buffer_size];
 
-            readPacketCallback = RawRead;
-            seekCallback = RawSeek;
-
-            fmtCtx->pb = ffmpeg.avio_alloc_context(buffer, buffer_size, 0, (void*)Handle.Handle, readPacketCallback, null, seekCallback);
+            fmtCtx->pb = ffmpeg.avio_alloc_context(buffer, buffer_size, 0, (void*)Handle.Handle, RawReadDelegate, null, RawSeekDelegate);
 
             receivedFrame = ffmpeg.av_frame_alloc();
 
@@ -429,7 +431,7 @@ namespace osu.Framework.Graphics.Video.Decoders
             if (res < 0)
                 throw new InvalidOperationException($"Error trying to open codec with id {codecParams->codec_id}: {GetErrorMessage(res)}");
 
-            prepareFilters();
+            
 
             packet = ffmpeg.av_packet_alloc();
             frame = ffmpeg.av_frame_alloc();

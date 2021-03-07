@@ -126,9 +126,51 @@ namespace osu.Framework.Graphics.Video
 
         public abstract bool Looping { get; internal set; }
 
-        public abstract void StartDecoding();
+        protected bool Running { get; private set; }
 
-        public abstract void StopDecoding(bool wait);
+        /// <summary>
+        /// Called to prepare the decoder for decoding.
+        /// </summary>
+        public void StartDecoding()
+        {
+            if (Running)
+                throw new InvalidOperationException($"Attempted to start {GetType().Name} which was already started");
+
+            StartDecodingProtected();
+
+            Running = true;
+
+            Logger.Log($"Started {GetType().Name}");
+        }
+
+        /// <summary>
+        /// Overridable version of <see cref="StartDecoding"/> that is called on setup.
+        /// </summary>
+        protected virtual void StartDecodingProtected()
+        {
+        }
+
+        /// <summary>
+        /// Called when decoding is requrested to stop.
+        /// </summary>
+        /// <param name="wait"></param>
+        public void StopDecoding(bool wait)
+        {
+            if (!Running)
+                throw new InvalidOperationException($"Attemted to stop a {GetType().Name} which is not running");
+
+            StopDecodingProtected(wait);
+
+            Running = false;
+        }
+
+        /// <summary>
+        /// Overridable version of <see cref="StopDecoding"/> that is called automatically.
+        /// </summary>
+        /// <param name="wait"></param>
+        protected virtual void StopDecodingProtected(bool wait)
+        {
+        }
 
         public abstract void Seek(double pos);
 
@@ -164,6 +206,8 @@ namespace osu.Framework.Graphics.Video
             Marshal.Copy(decoder.managedReadBuffer, 0, (IntPtr)buf, read);
             return read;
         }
+
+        protected readonly avio_alloc_context_read_packet RawReadDelegate = RawRead;
 
         /// <summary>
         /// Provides a callback for AVIO to seek a managed stream with.
@@ -201,6 +245,8 @@ namespace osu.Framework.Graphics.Video
 
             return decoder.Stream.Position;
         }
+
+        protected readonly avio_alloc_context_seek RawSeekDelegate = RawSeek;
 
         /// <summary>
         /// Formats an error message from an error code.
