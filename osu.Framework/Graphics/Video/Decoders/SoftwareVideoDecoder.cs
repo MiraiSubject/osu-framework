@@ -162,10 +162,26 @@ namespace osu.Framework.Graphics.Video.Decoders
             seekEvent.Reset();
             decoderActions.Add(() =>
             {
+                // Don't queue more frames
+                decodedFrames.ItemRemoved -= frameDecodeCallback;
+
+                // Seek
                 ffmpeg.av_seek_frame(fmtCtx, stream->index, (long)(pos / timebase / 1000.0), ffmpeg.AVSEEK_FLAG_BACKWARD);
                 ffmpeg.avcodec_flush_buffers(CodecCtx);
                 skipOutputUntilTime = pos;
+
+                // Discard current frames
                 decodedFrames.Clear();
+                decodedFrames.ItemRemoved += frameDecodeCallback;
+
+                // Decode until we're at the right position
+                // Needs to be a while loop because the first few frames decoded after the seek may not be at the correct time,
+                // so just skip until pos is reached
+                while (decodedFrames.Count < max_pending_frames)
+                {
+                    decodeSingleFrame();
+                }
+
                 seekEvent.Set();
             });
         }
@@ -181,6 +197,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         public override IEnumerable<DecodedFrame> GetDecodedFrames()
         {
+            // Wait for any possible pending seek to finish, so we don't send old frames
             seekEvent.Wait();
 
             var frames = new List<DecodedFrame>(decodedFrames.Count);
@@ -284,9 +301,19 @@ namespace osu.Framework.Graphics.Video.Decoders
             lastDecodedFrameTime = (float)frameTime;
         }
 
+        private const int max_pending_frames = 3;
+
+        private void frameDecodeCallback(object sender, EventArgs _)
+        {
+            if (!decodingTaskCancellationTokenSource.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < max_pending_frames)
+            {
+                // Insert an action that decodes a frame into the queue
+                decoderActions.Add(decodeSingleFrame);
+            }
+        }
+
         private void decodingLoop(CancellationToken token)
         {
-            const int max_pending_frames = 3;
             outFrame = ffmpeg.av_frame_alloc(); // TODO what if exception
             outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
             outFrame->width = CodecCtx->width;
@@ -294,14 +321,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
             try
             {
-                decodedFrames.ItemRemoved += (sender, _) =>
-                {
-                    if (!token.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < max_pending_frames)
-                    {
-                        // Insert an action that decodes a frame into the queue
-                        decoderActions.Add(decodeSingleFrame);
-                    }
-                };
+                decodedFrames.ItemRemoved += frameDecodeCallback;
 
                 // Decode initial frames
                 for (int i = 0; i < max_pending_frames; ++i)
@@ -327,6 +347,8 @@ namespace osu.Framework.Graphics.Video.Decoders
 
                 if (RawState != DecoderState.Faulted)
                     RawState = DecoderState.Stopped;
+
+                decodedFrames.ItemRemoved -= frameDecodeCallback;
             }
         }
 

@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using osu.Framework.Logging;
 
 namespace osu.Framework.Graphics.Video
 {
@@ -20,6 +21,18 @@ namespace osu.Framework.Graphics.Video
             }
 
             return success;
+        }
+
+        public new void Clear()
+        {
+            int old_count = Count;
+            base.Clear();
+
+            // Invoke once for every item that used to be in the queue
+            for (int i = 0; i < old_count; ++i)
+            {
+                ItemRemoved?.Invoke(this, EventArgs.Empty);
+            }
         }
     }
 }
