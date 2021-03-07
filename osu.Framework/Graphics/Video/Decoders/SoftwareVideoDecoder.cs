@@ -23,8 +23,8 @@ namespace osu.Framework.Graphics.Video.Decoders
         private Task decodingTask;
 
         private readonly ConcurrentQueue<Texture> availableTextures = new ConcurrentQueue<Texture>();
-        private readonly ConcurrentQueue<DecodedFrame> decodedFrames = new ConcurrentQueue<DecodedFrame>();
-        private readonly ConcurrentQueue<Action> decoderActions = new ConcurrentQueue<Action>();
+        private readonly ConcurrentNotifyQueue<DecodedFrame> decodedFrames = new ConcurrentNotifyQueue<DecodedFrame>();
+        private readonly BlockingCollection<Action> decoderActions = new BlockingCollection<Action>();
 
         private readonly ManualResetEventSlim seekEvent = new ManualResetEventSlim(true);
 
@@ -49,8 +49,8 @@ namespace osu.Framework.Graphics.Video.Decoders
 
             disposed = true;
 
-            decoderActions.Clear();
             StopDecoding(true);
+            decoderActions.Dispose();
 
             if (fmtCtx != null && opened)
             {
@@ -169,7 +169,7 @@ namespace osu.Framework.Graphics.Video.Decoders
             }
 
             seekEvent.Reset();
-            decoderActions.Enqueue(() =>
+            decoderActions.Add(() =>
             {
                 ffmpeg.av_seek_frame(fmtCtx, stream->index, (long)(pos / timebase / 1000.0), ffmpeg.AVSEEK_FLAG_BACKWARD);
                 ffmpeg.avcodec_flush_buffers(CodecCtx);
@@ -255,71 +255,84 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         private volatile float lastDecodedFrameTime;
 
+        private AVFrame* outFrame; // TODO fix this
+
+        private void decodeSingleFrame()
+        {
+            AVFrame* newFrame = decodeNextFrame();
+
+            if (newFrame == null)
+                return;
+
+            double frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timebase * 1000;
+
+            if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
+            {
+                skipOutputUntilTime = null;
+
+                ffmpeg.sws_scale(swsCtx, newFrame->data, newFrame->linesize, 0, CodecCtx->height, convDstData, convDstLineSize);
+
+                // Maybe this could be pooled too, but probably not worth the effort without benchmarking
+                outFrame->data = new byte_ptrArray8();
+                outFrame->linesize = new int_array8();
+                outFrame->data.UpdateFrom(convDstData);
+                outFrame->linesize.UpdateFrom(convDstLineSize);
+
+                if (!availableTextures.TryDequeue(out Texture tex))
+                {
+                    // Create new textures as needed
+                    tex = new Texture(new VideoTexture(codecParams->width, codecParams->height));
+                }
+
+                var upload = new VideoTextureUpload(outFrame);
+
+                tex.SetData(upload);
+                decodedFrames.Enqueue(new DecodedFrame { Time = frameTime, Texture = tex });
+            }
+
+            lastDecodedFrameTime = (float)frameTime;
+        }
+
         private void decodingLoop(CancellationToken token)
         {
             const int max_pending_frames = 3;
-            AVFrame* outFrame = ffmpeg.av_frame_alloc(); // TODO what if exception
+            outFrame = ffmpeg.av_frame_alloc(); // TODO what if exception
+            outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
+            outFrame->width = CodecCtx->width;
+            outFrame->height = CodecCtx->height;
 
             try
             {
+                decodedFrames.ItemRemoved += (sender, _) =>
+                {
+                    if (!token.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < max_pending_frames)
+                    {
+                        // Insert an action that decodes a frame into the queue
+                        decoderActions.Add(decodeSingleFrame);
+                    }
+                };
+
+                // Decode initial frames
+                for (int i = 0; i < max_pending_frames; ++i)
+                {
+                    decodeSingleFrame();
+                }
+
                 while (!token.IsCancellationRequested)
                 {
-                    if (decodedFrames.Count < max_pending_frames)
-                    {
-                        AVFrame* newFrame = decodeNextFrame();
+                    Action cmd = decoderActions.Take(token);
 
-                        if (newFrame != null)
-                        {
-                            double frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timebase * 1000;
-
-                            if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
-                            {
-                                skipOutputUntilTime = null;
-
-                                ffmpeg.sws_scale(swsCtx, newFrame->data, newFrame->linesize, 0, CodecCtx->height, convDstData, convDstLineSize);
-
-                                var outFrameData = new byte_ptrArray8();
-                                outFrameData.UpdateFrom(convDstData);
-
-                                var linesize = new int_array8();
-                                linesize.UpdateFrom(convDstLineSize);
-
-                                outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
-                                outFrame->width = CodecCtx->width;
-                                outFrame->height = CodecCtx->height;
-                                outFrame->data = outFrameData;
-                                outFrame->linesize = linesize;
-
-                                if (!availableTextures.TryDequeue(out Texture tex))
-                                {
-                                    tex = new Texture(new VideoTexture(codecParams->width, codecParams->height));
-                                }
-
-                                var upload = new VideoTextureUpload(outFrame);
-
-                                tex.SetData(upload);
-                                decodedFrames.Enqueue(new DecodedFrame { Time = frameTime, Texture = tex });
-                            }
-
-                            lastDecodedFrameTime = (float)frameTime;
-                        }
-                    }
-                    else
-                    {
-                        RawState = DecoderState.Ready;
-                        Thread.Sleep(1); // TODO actually wait
-                    }
-
-                    while (!decoderActions.IsEmpty && !token.IsCancellationRequested)
-                    {
-                        if (decoderActions.TryDequeue(out var cmd))
-                            cmd();
-                    }
+                    cmd();
                 }
+            }
+            catch (OperationCanceledException e) when (e.CancellationToken == token)
+            {
+                // pass
             }
             finally
             {
-                ffmpeg.av_frame_free(&outFrame);
+                fixed (AVFrame** framePtr = &outFrame)
+                    ffmpeg.av_frame_free(framePtr);
 
                 if (RawState != DecoderState.Faulted)
                     RawState = DecoderState.Stopped;
