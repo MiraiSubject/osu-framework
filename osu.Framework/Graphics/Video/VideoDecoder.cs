@@ -325,7 +325,9 @@ namespace osu.Framework.Graphics.Video
         /// <summary>
         /// The expected pixel format for raw frames.
         /// </summary>
-        public AVPixelFormat OutputPixelFormat { get; protected set; }
+        public AVPixelFormat OutputPixelFormat => decodedPixelFormat.GetValueOrDefault(codecCtx->pix_fmt);
+
+        private AVPixelFormat? decodedPixelFormat;
 
         private readonly AVHWDeviceType hwDevice = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE;
 
@@ -348,7 +350,6 @@ namespace osu.Framework.Graphics.Video
         private byte_ptrArray4 convDstData;
         private int_array4 convDstLineSize;
         private volatile float lastDecodedFrameTime;
-        private bool foundPixFmt = false;
 
         private bool decodeNextFrame(AVFrame* frame)
         {
@@ -433,10 +434,9 @@ namespace osu.Framework.Graphics.Video
                 hwFrame->best_effort_timestamp = frame->best_effort_timestamp;
 
                 // Detect the hardware pixel format for sws after the first frame
-                if (!foundPixFmt)
+                if (!decodedPixelFormat.HasValue)
                 {
-                    OutputPixelFormat = (AVPixelFormat)hwFrame->format;
-                    foundPixFmt = true;
+                    decodedPixelFormat = (AVPixelFormat)hwFrame->format;
                 }
 
                 ffmpeg.av_frame_unref(frame);
