@@ -322,11 +322,10 @@ namespace osu.Framework.Graphics.Video
             });
         }
 
-        // TODO this probably fails when hardware supports formats like yuv444, as NV12 more like yuv420
         /// <summary>
         /// The expected pixel format for raw frames.
         /// </summary>
-        public AVPixelFormat OutputPixelFormat => IsUsingHardwareDecoder ? AVPixelFormat.AV_PIX_FMT_NV12 : codecCtx->pix_fmt;
+        public AVPixelFormat OutputPixelFormat { get; protected set; }
 
         private readonly AVHWDeviceType hwDevice = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE;
 
@@ -348,8 +347,8 @@ namespace osu.Framework.Graphics.Video
         private IntPtr conversionBuffer;
         private byte_ptrArray4 convDstData;
         private int_array4 convDstLineSize;
-
         private volatile float lastDecodedFrameTime;
+        private bool foundPixFmt = false;
 
         private bool decodeNextFrame(AVFrame* frame)
         {
@@ -409,16 +408,12 @@ namespace osu.Framework.Graphics.Video
             if (!decodeNextFrame(frame))
                 return;
 
-            // Filters and hardware frame are lazy-initialized
             if (swsCtx == null)
             {
-                prepareFilters();
-
                 // Check if fallback was used
                 if (IsUsingHardwareDecoder)
                 {
                     Logger.Log($"Using {Marshal.PtrToStringAnsi((IntPtr)codecCtx->hwaccel->name)} for {Marshal.PtrToStringAnsi((IntPtr)codecCtx->codec->name)}");
-                    hwFrame = ffmpeg.av_frame_alloc();
                 }
                 else if (IsHardwareDecoder && !IsUsingHardwareDecoder)
                 {
@@ -429,6 +424,7 @@ namespace osu.Framework.Graphics.Video
 
             if (IsUsingHardwareDecoder)
             {
+                hwFrame = ffmpeg.av_frame_alloc();
                 int res = ffmpeg.av_hwframe_transfer_data(hwFrame, frame, 0);
                 if (res < 0)
                     throw new InvalidOperationException("Failed to transfer data from hardware device");
@@ -436,9 +432,19 @@ namespace osu.Framework.Graphics.Video
                 // Hardware frame has negative long as best effort timestamp so copy it from the original frame.
                 hwFrame->best_effort_timestamp = frame->best_effort_timestamp;
 
+                // Detect the hardware pixel format for sws after the first frame
+                if (!foundPixFmt)
+                {
+                    OutputPixelFormat = (AVPixelFormat)hwFrame->format;
+                    foundPixFmt = true;
+                }
+
                 ffmpeg.av_frame_unref(frame);
                 frame = hwFrame;
             }
+
+            if (swsCtx == null)
+                prepareFilters();
 
             double frameTime = (frame->best_effort_timestamp - selectedStream->start_time) * timebase * 1000;
 
