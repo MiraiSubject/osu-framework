@@ -27,7 +27,24 @@ namespace osu.Framework.Graphics.Video
     {
         public static VideoDecoder CreateVideoDecoder(Stream stream, Scheduler scheduler, AVHWDeviceType hwDevice = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
         {
-            return new SoftwareVideoDecoder(stream, scheduler);
+            // TODO test all versions
+            // TODO dynamically detect features
+            switch (RuntimeInfo.OS)
+            {
+                case RuntimeInfo.Platform.Windows:
+                    return new HardwareVideoDecoder(stream, scheduler, AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2);
+
+                case RuntimeInfo.Platform.Linux:
+                    return new HardwareVideoDecoder(stream, scheduler, AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI);
+
+                case RuntimeInfo.Platform.macOS:
+                    return new HardwareVideoDecoder(stream, scheduler, AVHWDeviceType.AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
+
+                case RuntimeInfo.Platform.iOS:
+                case RuntimeInfo.Platform.Android:
+                default:
+                    return new SoftwareVideoDecoder(stream, scheduler);
+            }
         }
 
 #if NET5_0
@@ -83,26 +100,40 @@ namespace osu.Framework.Graphics.Video
 
         ~VideoDecoder()
         {
-            Dispose();
+            Dispose(false);
         }
 
         #region Disposal
 
         protected bool Disposed { get; private set; }
 
-        public virtual void Dispose()
+        public void Dispose()
+        {
+            Dispose(true);
+
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool called)
         {
             if (Disposed)
                 return;
+
+            Disposed = true;
 
             StopDecoding(true);
 
             if (fmtCtx != null)
             {
                 fixed (AVFormatContext** ptr = &fmtCtx)
-                {
                     ffmpeg.avformat_close_input(ptr);
-                }
+            }
+
+            if (codecCtx != null)
+            {
+                CodecContextCleanup(codecCtx);
+                fixed (AVCodecContext** ptr = &codecCtx)
+                    ffmpeg.avcodec_free_context(ptr);
             }
 
             Stream.Dispose();
@@ -122,8 +153,6 @@ namespace osu.Framework.Graphics.Video
 
             DecoderActions.Dispose();
             DecoderActions = null;
-
-            Disposed = true;
         }
 
         #endregion
@@ -294,6 +323,26 @@ namespace osu.Framework.Graphics.Video
             });
         }
 
+        /// <summary>
+        /// Called just after the <see cref="AVCodecContext"/> was created to perform decoder-specific setup
+        /// </summary>
+        protected virtual void CodecContextSetup(AVCodecContext* ctx) { }
+
+        /// <summary>
+        /// Called just before the <see cref="AVCodecContext"/> is freed to perform decoder-specific cleanup
+        /// </summary>
+        protected virtual void CodecContextCleanup(AVCodecContext* ctx) { }
+
+        /// <summary>
+        /// The expected pixel format for raw frames.
+        /// </summary>
+        protected virtual AVPixelFormat OutputPixelFormat => codecCtx->pix_fmt;
+
+        /// <summary>
+        /// Called just after decoding a frame to apply decoder-specific changes
+        /// </summary>
+        protected virtual AVFrame* TransformDecodedFrame(AVFrame* frame) => frame;
+
         private AVFormatContext* fmtCtx;
         private AVCodecContext* codecCtx;
         private AVStream* stream;
@@ -368,6 +417,8 @@ namespace osu.Framework.Graphics.Video
         {
             if (!decodeNextFrame(frame))
                 return;
+
+            frame = TransformDecodedFrame(frame);
 
             double frameTime = (frame->best_effort_timestamp - stream->start_time) * timebase * 1000;
 
@@ -487,6 +538,8 @@ namespace osu.Framework.Graphics.Video
             // Create a codec context used to decode the found video stream
             codecCtx = ffmpeg.avcodec_alloc_context3(codec);
 
+            CodecContextSetup(codecCtx);
+
             stream = fmtCtx->streams[streamIndex];
             timebase = stream->time_base.GetValue();
 
@@ -504,15 +557,16 @@ namespace osu.Framework.Graphics.Video
         private void prepareFilters()
         {
             const AVPixelFormat dest_fmt = AVPixelFormat.AV_PIX_FMT_RGBA;
+            AVPixelFormat srcFmt = OutputPixelFormat;
             int w = codecCtx->width;
             int h = codecCtx->height;
 
-            Logger.Log($"Conversion is from {codecCtx->pix_fmt} to {dest_fmt}");
+            Logger.Log($"Conversion is from {srcFmt} to {dest_fmt}");
 
             // 1 = SWS_FAST_BILINEAR
             // https://www.ffmpeg.org/doxygen/trunk/swscale_8h_source.html#l00056
             // TODO check input and output format support
-            swsCtx = ffmpeg.sws_getContext(w, h, codecCtx->pix_fmt, w, h,
+            swsCtx = ffmpeg.sws_getContext(w, h, srcFmt, w, h,
                 dest_fmt, 1, null, null, null);
 
             int bufferSize = ffmpeg.av_image_get_buffer_size(dest_fmt, w, h, 1);
