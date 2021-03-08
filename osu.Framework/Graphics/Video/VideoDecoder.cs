@@ -217,7 +217,7 @@ namespace osu.Framework.Graphics.Video
 
                 // Run decoding loop on a separate thread
                 decodingTask = Task.Factory.StartNew(
-                    decodingLoop,
+                    () => decodingLoop(decodingTaskToken.Token),
                     decodingTaskToken.Token,
                     TaskCreationOptions.LongRunning,
                     TaskScheduler.Default);
@@ -449,7 +449,7 @@ namespace osu.Framework.Graphics.Video
             lastDecodedFrameTime = (float)frameTime;
         }
 
-        private void decodingLoop()
+        private void decodingLoop(CancellationToken token)
         {
             outFrame = ffmpeg.av_frame_alloc();
             outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
@@ -462,7 +462,7 @@ namespace osu.Framework.Graphics.Video
 
             void frameDecodeCallback(object sender, EventArgs _)
             {
-                if (!decodingTaskToken.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < MaxPendingFrames)
+                if (!token.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < MaxPendingFrames)
                 {
                     // Insert an action that decodes a frame into the queue
                     DecoderActions.Add(() => decodeSingleFrame(decodedFrame));
@@ -477,10 +477,10 @@ namespace osu.Framework.Graphics.Video
                 while (DecodedFrames.Count < MaxPendingFrames)
                     decodeSingleFrame(decodedFrame);
 
-                while (!decodingTaskToken.IsCancellationRequested)
-                    DecoderActions.Take(decodingTaskToken.Token)();
+                while (!token.IsCancellationRequested)
+                    DecoderActions.Take(token)();
             }
-            catch (OperationCanceledException e) when (e.CancellationToken == decodingTaskToken.Token)
+            catch (OperationCanceledException e) when (e.CancellationToken == token)
             {
                 // pass
             }
