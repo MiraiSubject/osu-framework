@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Concurrent;
-using osu.Framework.Logging;
 
 namespace osu.Framework.Graphics.Video
 {
@@ -11,11 +10,13 @@ namespace osu.Framework.Graphics.Video
     {
         public event EventHandler ItemRemoved;
 
+        public bool BlockNotifications { get; set; }
+
         public new bool TryDequeue(out T result)
         {
             bool success = base.TryDequeue(out result);
 
-            if (success)
+            if (success && !BlockNotifications)
             {
                 ItemRemoved?.Invoke(this, EventArgs.Empty);
             }
@@ -27,6 +28,9 @@ namespace osu.Framework.Graphics.Video
         {
             int old_count = Count;
             base.Clear();
+
+            if (BlockNotifications)
+                return;
 
             // Invoke once for every item that used to be in the queue
             for (int i = 0; i < old_count; ++i)
