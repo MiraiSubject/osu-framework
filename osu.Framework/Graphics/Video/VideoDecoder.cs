@@ -38,9 +38,9 @@ namespace osu.Framework.Graphics.Video
                     return new HardwareVideoDecoder(stream, scheduler, AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI);
 
                 case RuntimeInfo.Platform.macOS:
+                case RuntimeInfo.Platform.iOS:
                     return new HardwareVideoDecoder(stream, scheduler, AVHWDeviceType.AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
 
-                case RuntimeInfo.Platform.iOS:
                 case RuntimeInfo.Platform.Android:
                 default:
                     return new SoftwareVideoDecoder(stream, scheduler);
