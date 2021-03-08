@@ -66,7 +66,7 @@ namespace osu.Framework.Graphics.Video.Decoders
             StopDecoding(true);
             decoderActions.Dispose();
 
-            if (fmtCtx != null && opened)
+            if (fmtCtx != null)
             {
                 fixed (AVFormatContext** ptr = &fmtCtx)
                 {
@@ -77,28 +77,8 @@ namespace osu.Framework.Graphics.Video.Decoders
             Stream.Dispose();
             Stream = null;
 
-            buffer = null;
-
             if (swsCtx != null)
                 ffmpeg.sws_freeContext(swsCtx);
-
-            if (packet != null)
-            {
-                fixed (AVPacket** ptr = &packet)
-                    ffmpeg.av_packet_free(ptr);
-            }
-
-            if (frame != null)
-            {
-                fixed (AVFrame** ptr = &frame)
-                    ffmpeg.av_frame_free(ptr);
-            }
-
-            if (receivedFrame != null)
-            {
-                fixed (AVFrame** ptr = &receivedFrame)
-                    ffmpeg.av_frame_free(ptr);
-            }
 
             while (decodedFrames.TryDequeue(out var f))
                 f.Texture.Dispose();
@@ -111,7 +91,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
         #endregion
 
-        public override double Duration => stream == null ? 0 : duration * timebase * 1000;
+        public override double Duration => stream == null ? 0 : (stream->duration <= 0 ? fmtCtx->duration : stream->duration) * timebase * 1000;
 
         public override bool Looping { get; internal set; }
 
@@ -174,7 +154,6 @@ namespace osu.Framework.Graphics.Video.Decoders
             if (!CanSeek)
                 throw new InvalidOperationException("This decoder cannot seek because the underlying stream used to decode the video does not support seeking.");
 
-
             seekEvent.Reset();
             decoderActions.Add(() =>
             {
@@ -195,7 +174,7 @@ namespace osu.Framework.Graphics.Video.Decoders
                 // so just skip until pos is reached
                 while (decodedFrames.Count < max_pending_frames)
                 {
-                    decodeSingleFrame();
+                    decodeSingleFrame(decodedFrame);
                 }
 
                 // Allow waiting GetDecodedFrames calls to continue
@@ -224,10 +203,9 @@ namespace osu.Framework.Graphics.Video.Decoders
             return frames;
         }
 
-        protected virtual AVFrame* decodeNextFrame()
+        private bool decodeNextFrame(AVFrame* frame)
         {
             ffmpeg.av_frame_unref(frame);
-            ffmpeg.av_frame_unref(receivedFrame);
 
             int receiveError;
 
@@ -258,44 +236,41 @@ namespace osu.Framework.Graphics.Video.Decoders
                             else
                                 RawState = DecoderState.EndOfStream;
 
-                            return null;
+                            return false;
                         }
                     } while (packet->stream_index != streamIndex);
 
                     res = ffmpeg.avcodec_send_packet(CodecCtx, packet);
                     if (res < 0)
-                        Logger.Log($"Error {GetErrorMessage(res)} sending packet in VideoDecoder");
+                        Logger.Log($"Error {GetErrorMessage(res)} sending packet in {GetType().Name}");
                 }
                 finally
                 {
-                    // TODO finally?
                     ffmpeg.av_packet_unref(packet);
                 }
 
                 receiveError = ffmpeg.avcodec_receive_frame(CodecCtx, frame);
             } while (receiveError == ffmpeg.AVERROR(ffmpeg.EAGAIN) && receiveError != 0);
 
-            return frame;
+            return true;
         }
 
         private volatile float lastDecodedFrameTime;
 
         private AVFrame* outFrame; // TODO fix this
 
-        private void decodeSingleFrame()
+        private void decodeSingleFrame(AVFrame* frame)
         {
-            AVFrame* newFrame = decodeNextFrame();
-
-            if (newFrame == null)
+            if (!decodeNextFrame(frame))
                 return;
 
-            double frameTime = (newFrame->best_effort_timestamp - stream->start_time) * timebase * 1000;
+            double frameTime = (frame->best_effort_timestamp - stream->start_time) * timebase * 1000;
 
             if (!skipOutputUntilTime.HasValue || skipOutputUntilTime.Value < frameTime)
             {
                 skipOutputUntilTime = null;
 
-                ffmpeg.sws_scale(swsCtx, newFrame->data, newFrame->linesize, 0, CodecCtx->height, convDstData, convDstLineSize);
+                ffmpeg.sws_scale(swsCtx, frame->data, frame->linesize, 0, CodecCtx->height, convDstData, convDstLineSize);
 
                 // Maybe this could be pooled too, but probably not worth the effort without benchmarking
                 outFrame->data = new byte_ptrArray8();
@@ -306,7 +281,7 @@ namespace osu.Framework.Graphics.Video.Decoders
                 if (!availableTextures.TryDequeue(out Texture tex))
                 {
                     // Create new textures as needed
-                    tex = new Texture(new VideoTexture(codecParams->width, codecParams->height));
+                    tex = new Texture(new VideoTexture(CodecCtx->width, CodecCtx->height));
                 }
 
                 var upload = new VideoTextureUpload(outFrame);
@@ -325,16 +300,20 @@ namespace osu.Framework.Graphics.Video.Decoders
             if (!decodingTaskToken.IsCancellationRequested && sender != null && ((ConcurrentNotifyQueue<DecodedFrame>)sender).Count < max_pending_frames)
             {
                 // Insert an action that decodes a frame into the queue
-                decoderActions.Add(decodeSingleFrame);
+                decoderActions.Add(() => decodeSingleFrame(decodedFrame));
             }
         }
 
         private void decodingLoop()
         {
-            outFrame = ffmpeg.av_frame_alloc(); // TODO what if exception
+            outFrame = ffmpeg.av_frame_alloc();
             outFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
             outFrame->width = CodecCtx->width;
             outFrame->height = CodecCtx->height;
+
+            decodedFrame = ffmpeg.av_frame_alloc();
+
+            packet = ffmpeg.av_packet_alloc();
 
             try
             {
@@ -342,7 +321,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
                 // Decode initial frames
                 while (decodedFrames.Count < max_pending_frames)
-                    decodeSingleFrame();
+                    decodeSingleFrame(decodedFrame);
 
                 while (!decodingTaskToken.IsCancellationRequested)
                     decoderActions.Take(decodingTaskToken.Token)();
@@ -356,6 +335,12 @@ namespace osu.Framework.Graphics.Video.Decoders
                 fixed (AVFrame** framePtr = &outFrame)
                     ffmpeg.av_frame_free(framePtr);
 
+                fixed (AVFrame** framePtr = &decodedFrame)
+                    ffmpeg.av_frame_free(framePtr);
+
+                fixed (AVPacket** packetPtr = &packet)
+                    ffmpeg.av_packet_free(packetPtr);
+
                 if (RawState != DecoderState.Faulted)
                     RawState = DecoderState.Stopped;
 
@@ -364,19 +349,13 @@ namespace osu.Framework.Graphics.Video.Decoders
         }
 
         private AVFormatContext* fmtCtx;
-        private byte* buffer;
-        private AVFrame* receivedFrame;
         protected AVCodecContext* CodecCtx;
         private AVStream* stream;
-        private long duration;
         private double timebase;
-        private AVCodecParameters* codecParams;
-        private AVFrame* frame;
         private AVPacket* packet;
+        private AVFrame* decodedFrame;
 
         private SwsContext* swsCtx;
-
-        private bool opened;
 
         private int streamIndex;
 
@@ -384,57 +363,54 @@ namespace osu.Framework.Graphics.Video.Decoders
         private byte_ptrArray4 convDstData;
         private int_array4 convDstLineSize;
 
-        protected virtual void prepareDecoding()
+        private void prepareDecoding()
         {
+            // TODO does this entire function leak massively when anything fails?
+
             const int buffer_size = 4096;
 
-            AVFormatContext* ctxPtr = ffmpeg.avformat_alloc_context();
-            fmtCtx = ctxPtr;
-            buffer = (byte*)ffmpeg.av_malloc(buffer_size);
+            // Allocate the format context
+            fmtCtx = ffmpeg.avformat_alloc_context();
 
-            fmtCtx->pb = ffmpeg.avio_alloc_context(buffer, buffer_size, 0, (void*)Handle.Handle, RawReadDelegate, null, RawSeekDelegate);
+            // Allocate a new avio context to have the format context use custom (managed) I/O routines
+            byte* avioBuffer = (byte*)ffmpeg.av_malloc(buffer_size);
+            fmtCtx->pb = ffmpeg.avio_alloc_context(avioBuffer, buffer_size, 0, (void*)Handle.Handle, RawReadDelegate, null, RawSeekDelegate);
 
-            receivedFrame = ffmpeg.av_frame_alloc();
-
-            int res = ffmpeg.avformat_open_input(&ctxPtr, "dummy", null, null);
+            // Open the input
+            int res;
+            fixed (AVFormatContext** ptr = &fmtCtx)
+                res = ffmpeg.avformat_open_input(ptr, "dummy", null, null);
 
             if (res < 0)
                 throw new InvalidOperationException($"Error opening file or stream: {GetErrorMessage(res)}");
 
+            // Retrieve streams information
             res = ffmpeg.avformat_find_stream_info(fmtCtx, null);
             if (res < 0)
                 throw new InvalidOperationException($"Error finding stream info: {GetErrorMessage(res)}");
 
-            opened = true;
-
+            // Find the codec and index of the best video stream
             AVCodec* codec = null;
-            streamIndex = ffmpeg.av_find_best_stream(fmtCtx, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
 
+            streamIndex = ffmpeg.av_find_best_stream(fmtCtx, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
             if (streamIndex < 0)
                 throw new InvalidOperationException($"Could not find valid stream: {GetErrorMessage(streamIndex)}");
 
+            // Create a codec context used to decode the found video stream
             CodecCtx = ffmpeg.avcodec_alloc_context3(codec);
 
             stream = fmtCtx->streams[streamIndex];
-            duration = stream->duration <= 0 ? fmtCtx->duration : stream->duration;
             timebase = stream->time_base.GetValue();
 
+            // Copy necessary information from the stream's info to the decoder context
             res = ffmpeg.avcodec_parameters_to_context(CodecCtx, stream->codecpar);
-
             if (res < 0)
                 throw new InvalidOperationException($"Error filling codec context with parameters: {GetErrorMessage(res)}");
 
-            codecParams = stream->codecpar;
-
+            // Open the codec context for decoding
             res = ffmpeg.avcodec_open2(CodecCtx, codec, null);
-
             if (res < 0)
-                throw new InvalidOperationException($"Error trying to open codec with id {codecParams->codec_id}: {GetErrorMessage(res)}");
-
-            
-
-            packet = ffmpeg.av_packet_alloc();
-            frame = ffmpeg.av_frame_alloc();
+                throw new InvalidOperationException($"Error trying to open codec with id {CodecCtx->codec_id}: {GetErrorMessage(res)}");
         }
 
         private void prepareFilters()
@@ -445,7 +421,7 @@ namespace osu.Framework.Graphics.Video.Decoders
 
             Logger.Log($"Conversion is from {CodecCtx->pix_fmt} to {dest_fmt}");
 
-            // 1 =  SWS_FAST_BILINEAR
+            // 1 = SWS_FAST_BILINEAR
             // https://www.ffmpeg.org/doxygen/trunk/swscale_8h_source.html#l00056
             // TODO check input and output format support
             swsCtx = ffmpeg.sws_getContext(w, h, CodecCtx->pix_fmt, w, h,
