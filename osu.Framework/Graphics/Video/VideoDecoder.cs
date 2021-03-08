@@ -322,6 +322,7 @@ namespace osu.Framework.Graphics.Video
             });
         }
 
+        // TODO this probably fails when hardware supports formats like yuv444, as NV12 more like yuv420
         /// <summary>
         /// The expected pixel format for raw frames.
         /// </summary>
