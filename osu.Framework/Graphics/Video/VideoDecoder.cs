@@ -380,10 +380,14 @@ namespace osu.Framework.Graphics.Video
                         {
                             // EOF
                             Logger.Log($"EOF, Looping: {Looping}, previous time: {lastDecodedFrameTime}");
+
                             if (Looping)
                                 Seek(0);
                             else
+                            {
                                 rawState = DecoderState.EndOfStream;
+                                ffmpeg.av_packet_unref(packet);
+                            }
 
                             return false;
                         }
